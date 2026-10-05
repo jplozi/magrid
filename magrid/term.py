@@ -70,6 +70,23 @@ TEAM = St(TEAL, bold=True)
 ACCENT = St(SKY)
 
 
+# Text colours for a terminal with a light background: the same roles, darker tones.
+LIGHT = {GREEN: 28, AMBER: 130, RED: 160, BLUE: 26, SKY: 25, TEAL: 30, GREY: 243, FAINT: 250}
+_text_map: dict[int, int] = {}
+
+
+def set_theme(name: str) -> None:
+    """dark (the default) or light: which background the text colours are chosen for."""
+    _text_map.clear()
+    if name.strip().lower() == "light":
+        _text_map.update(LIGHT)
+
+
+def text_colour(fg: Optional[int], bg: Optional[int]) -> Optional[int]:
+    """The foreground actually used: remapped for a light terminal, except on a coloured bar."""
+    return _text_map.get(fg, fg) if bg is None else fg
+
+
 class Line(list):
     """A line of text as (text, style) spans."""
 
@@ -167,7 +184,7 @@ def ansi(ln: Line, color: bool = True) -> str:
         if st.rev:
             codes.append("7")
         if st.fg is not None:
-            codes.append(f"38;5;{st.fg}")
+            codes.append(f"38;5;{text_colour(st.fg, st.bg)}")
         if st.bg is not None:
             codes.append(f"48;5;{st.bg}")
         out.append(f"\x1b[{';'.join(codes)}m{text}\x1b[0m" if codes else text)

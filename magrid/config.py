@@ -42,6 +42,9 @@ besteffort_walltime = 48h
 
 # Logins of your teammates, highlighted when they hold a machine.
 team =
+
+# dark or light: the background of your terminal (the text colours are chosen for it).
+theme = dark
 """
 
 
@@ -72,6 +75,7 @@ class Config:
     command: str = "sleep infinity"
     besteffort_walltime: int = 48 * 3600
     team: list[str] = field(default_factory=list)
+    theme: str = "dark"
     path: Path = field(default_factory=config_path)
 
     def types_for(self, queue_kind: str) -> list[str]:
@@ -97,6 +101,7 @@ def load(path: Path | None = None) -> Config:
         command=s.get("command").strip(),
         besteffort_walltime=parse_duration(s.get("besteffort_walltime")),
         team=s.get("team", "").replace(",", " ").split(),
+        theme=os.environ.get("MAGRID_THEME") or s.get("theme", "dark"),
         path=path,
     )
 
