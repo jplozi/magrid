@@ -145,6 +145,9 @@ def _working_days(start: int, end: int):
 def _quota_finding(v: Verdict, day: dt.date, seconds: int, cores: int, quota: Optional[Quota], cluster: str) -> None:
     if not cores or quota is None:
         return
+    if not quota.known and not any(f.rule == "quota?" for f in v.findings):
+        v.add("quota?", True, "the daytime already used could not be read from usagepolicycheck: "
+              "jobs of yours that ended earlier today are not counted below")  # fmt: skip
     need = seconds * cores
     left = quota.left(day)
     where = cluster or "the cluster"

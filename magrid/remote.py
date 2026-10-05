@@ -50,6 +50,8 @@ class Remote:
         self.log: list[str] = []  # every command sent, for --verbose and for the report
 
     def host(self, site: str) -> str:
+        if self.here is not None and self.cfg.ssh == "{site}.g5k":
+            return site  # on a frontend, the other frontends are simply "lille", "nancy", ...
         return self.cfg.ssh.format(site=site)
 
     def _argv(self, site: str) -> list[str]:
