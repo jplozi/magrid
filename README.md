@@ -2,8 +2,8 @@
 
 Book Grid'5000 machines from the terminal, without ever breaking the Usage Policy.
 
-magrid shows what you can book on your usual clusters and for how long, who
-holds the machines you want, and builds the `oarsub` commands itself: the
+magrid shows what you can book on your clusters and for how long, who holds
+the machines you want, and builds the `oarsub` commands itself: the
 start, the walltime, the queue and the job types are computed from the rules,
 so the weekly "usage has been violating the Usage Policy" e-mail has nothing
 to say.
@@ -54,6 +54,9 @@ magrid book yeti:2 --weekend --wait    too early to reserve? stay running and bo
 magrid book grdix:2             two queued jobs on an abaca cluster
 magrid book yeti-2 -n           dry run on a given node: show the command, submit nothing
 magrid who roazhon15            who holds it, with full name and group, until when, and who is next
+magrid board arm                the ARM clusters (also: lyon, gpu, x86, power, exotic, abaca, all)
+magrid clusters arm lyon        every cluster of every site, filtered; ✓ marks those on your board
+magrid add hydra pyxis          put clusters on your board (magrid hide takes them off)
 magrid gantt dahu               the timeline of a cluster
 magrid jobs                     your jobs on every site
 magrid extend 1234567 --max     extend a job as far as the rules allow
@@ -64,7 +67,20 @@ magrid rules                    the rules, in one page
 
 In the interactive board: arrows to move, `+` and `-` to choose how many nodes
 in a cell, `m` for as many as possible, Enter to review the exact commands and
-book, `g` for the timeline of the cluster, `j` for your jobs, `?` for help.
+book, `a` to add a cluster (type to search: `arm`, `lyon`, `gpu`, `epyc`),
+`x` to hide one, `g` for the timeline of the cluster, `j` for your jobs, `?`
+for help.
+
+## Which clusters
+
+Your board shows the clusters you have run jobs on in the last two months,
+read from the OAR databases of every site once a day. Add or hide clusters
+with `a` and `x` in the board, or `magrid add` and `magrid hide`; a cluster you
+book with magrid joins the board by itself. Any command also takes other
+clusters directly: `magrid board lyon`, `magrid gantt sasquatch`,
+`magrid book pyxis:2 --tonight`. `magrid clusters` lists them all, with
+architecture, CPU, cores, memory, GPUs, your access, and when you last used
+each.
 
 Booking always shows the plan first, with every rule that was checked and the
 `oarsub` command, and asks before submitting:
@@ -137,10 +153,13 @@ none of the tolerances of the official check are used.
 
 ## What it runs on Grid'5000
 
-Reading (every refresh, one ssh connection to one frontend): `curl` on the
-Grid'5000 API (node status, your jobs), and `usagepolicycheck --json` for the
-sites of your default-queue clusters. Once a week: the cluster descriptions,
-your group and your abaca priorities.
+Reading, through one ssh connection to one frontend: `curl` on the Grid'5000
+API (node status, your jobs) at every refresh, once a minute in the
+interactive board; `usagepolicycheck --json` for the sites of your
+default-queue clusters, every ten minutes and after each of your actions; once
+a day, which clusters you used, with one query per site on the OAR databases'
+public read-only account (about a second each, five at nancy); once a week,
+the cluster descriptions, your group and your abaca priorities.
 
 Changing something, only after you confirm: `oarsub`, `oardel` and
 `oarwalltime`, on the frontend of the site concerned, with the exact command
@@ -152,9 +171,11 @@ frontend.
 ## Configuration
 
 `magrid config` creates and shows `~/.config/magrid/config.ini`: the clusters
-on the board, the ssh alias pattern, the safety margin, the job types per
-queue (`deploy destructive` by default for the default queue; `exotic` is
-added where needed), one job per node or per cluster, your teammates' logins.
+on the board (`auto`, or a list of your own) with the clusters added and
+hidden, the ssh alias pattern, the safety margin, the job types per queue
+(`deploy destructive` by default for the default queue; `exotic` is added
+where needed), one job per node or per cluster, your teammates' logins, and
+`theme = light` for a terminal with a light background.
 
 ## Limits
 
@@ -171,7 +192,7 @@ added where needed), one job per node or per cluster, your teammates' logins.
 ## Development
 
 ```
-python3 -m unittest discover -s tests -t .     # about 150 tests, offline
+python3 -m unittest discover -s tests -t .     # about 180 tests, offline
 ```
 
 - `tests/oracle/make_oracle.py` regenerates the corpus for the comparison with

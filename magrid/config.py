@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,8 +14,13 @@ DEFAULT_TEXT = """\
 # magrid configuration. Every line is optional; these are the defaults.
 
 [magrid]
-# The clusters shown on the board, in this order.
-clusters = yeti dahu larochette grdix granite grosminet roazhon15
+# The clusters on the board: "auto" for those you have run jobs on in the last
+# two months (read from the OAR databases once a day), or a list of names.
+# "add" and "hide" are applied on top; the a and x keys of the board, and
+# "magrid add" and "magrid hide", write them.
+clusters = auto
+add =
+hide =
 
 # How to reach the frontend of a site. {site} is replaced by the site name.
 # When magrid runs on a frontend, that site is reached directly.
@@ -64,7 +70,9 @@ def config_path() -> Path:
 
 @dataclass
 class Config:
-    clusters: list[str] = field(default_factory=list)
+    clusters: list[str] = field(default_factory=lambda: ["auto"])
+    add: list[str] = field(default_factory=list)
+    hide: list[str] = field(default_factory=list)
     ssh: str = "{site}.g5k"
     gateway: str = ""
     margin: int = 300
@@ -90,7 +98,9 @@ def load(path: Path | None = None) -> Config:
         parser.read(path)
     s = parser["magrid"]
     return Config(
-        clusters=s.get("clusters", "").replace(",", " ").split(),
+        clusters=s.get("clusters", "auto").replace(",", " ").split() or ["auto"],
+        add=s.get("add", "").replace(",", " ").split(),
+        hide=s.get("hide", "").replace(",", " ").split(),
         ssh=s.get("ssh").strip(),
         gateway=s.get("gateway", "").strip(),
         margin=parse_duration(s.get("margin")),
@@ -104,6 +114,31 @@ def load(path: Path | None = None) -> Config:
         theme=os.environ.get("MAGRID_THEME") or s.get("theme", "dark"),
         path=path,
     )
+
+
+def set_lines(values: dict[str, str], path: Path | None = None) -> Path:
+    """Set some keys of the configuration file, keeping everything else (comments
+    included) as it is. The file is created from the defaults if needed."""
+    path = path or config_path()
+    text = path.read_text() if path.exists() else DEFAULT_TEXT
+    lines = text.splitlines()
+    for key, value in values.items():
+        new = f"{key} = {value}".rstrip()
+        hit = [i for i, ln in enumerate(lines) if re.match(rf"^{re.escape(key)}\s*[=:]", ln)]
+        if hit:
+            lines[hit[0]] = new
+            continue
+        after = [i for i, ln in enumerate(lines) if re.match(r"^(clusters|add|hide)\s*[=:]", ln)]
+        anchor = after[-1] if after else next((i for i, ln in enumerate(lines) if ln.strip() == "[magrid]"), None)
+        if anchor is None:
+            lines += ["[magrid]", new]
+        else:
+            lines.insert(anchor + 1, new)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(path)
+    return path
 
 
 def write_default(path: Path | None = None) -> Path:

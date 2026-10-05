@@ -154,9 +154,13 @@ def doctor(app) -> int:
     lvl = policy.level(ref.level)
     say(bool(ref.level), f"you are {ref.me} ({ref.full_name}), group {ref.gga}, level {ref.level or 'unknown'}",
         f"{lvl.max_reservations} advance reservations per site" + ("" if lvl.max_delay is None else f", at most {lvl.max_delay // 3600} h ahead"))  # fmt: skip
-    unknown = [c for c in app.cfg.clusters if c not in ref.clusters]
-    say(not unknown, "configured clusters: " + " ".join(app.cfg.clusters), ("unknown: " + " ".join(unknown)) if unknown else "")
-    sites = sorted({ref.site_of(c) for c in app.cfg.clusters if ref.site_of(c)})
+    named = [c for c in app.cfg.clusters + app.cfg.add + app.cfg.hide if c != "auto"]
+    unknown = [c for c in named if c not in ref.clusters]
+    board = app.board()
+    how = "used in the last two months" if app.cfg.clusters == ["auto"] else "from the configuration"
+    say(not unknown and bool(board), f"your board ({how}" + (", with add and hide" if app.cfg.add or app.cfg.hide else "") + "): "
+        + (" ".join(board) or "empty"), ("unknown in the configuration: " + " ".join(unknown)) if unknown else "")  # fmt: skip
+    sites = sorted({ref.site_of(c) for c in board if ref.site_of(c)})
     script = FETCH_PRELUDE + f"""
 echo "@@tools $(for t in oarsub oarstat oardel oarwalltime usagepolicycheck curl gzip base64; do command -v $t >/dev/null || printf '%s ' $t; done)"
 echo "@@checker $(sha256sum {verified.CHECKER_PATH} 2>/dev/null | cut -d' ' -f1)"

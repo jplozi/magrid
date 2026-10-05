@@ -12,6 +12,7 @@ Two kinds of data, both read through one ssh connection to one frontend (the
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 import gzip
 import json
@@ -28,6 +29,9 @@ from .model import ACTIVE_STATES, Cluster, MyJob, Node, Snapshot, resv_from_api
 from .remote import FETCH_EPILOGUE, FETCH_PRELUDE, Remote, RemoteError, env_site_override, unpack
 
 REFERENCE_MAX_AGE = 7 * 86400
+REFERENCE_VERSION = 3  # bumped when the cached description gains fields
+HISTORY_MAX_AGE = 86400
+HISTORY_DAYS = 90
 JOB_STATES = "waiting,launching,running,hold,toLaunch,toAckReservation,finishing"
 
 
@@ -48,6 +52,7 @@ class Reference:
     sites: list[str] = field(default_factory=list)
     clusters: dict[str, dict] = field(default_factory=dict)  # name -> description (see _reduce_cluster)
     access: dict[str, str] = field(default_factory=dict)  # nodeset -> p1..p4 / besteffort
+    version: int = 1
 
     @property
     def age(self) -> float:
@@ -71,8 +76,8 @@ def _reference_path() -> Path:
 
 def _reduce_cluster(site: str, c: dict) -> dict:
     nodes = {}
-    cpu = ""
-    sockets = cores = threads = ram = 0
+    cpu = vendor = microarch = platform = gpu_model = ""
+    sockets = cores = threads = ram = gpus = 0
     for n in c.get("nodes") or []:
         arch = n.get("architecture") or {}
         sjt = n.get("supported_job_types") or {}
@@ -83,9 +88,19 @@ def _reduce_cluster(site: str, c: dict) -> dict:
         }
         if not cpu:
             proc = n.get("processor") or {}
-            cpu = " ".join(str(x) for x in (proc.get("model"), proc.get("version")) if x and x != "Unknown")
+            cpu = " ".join(" ".join(str(x).split()) for x in (proc.get("model"), proc.get("version")) if x and x != "Unknown")
+            maker = str(proc.get("vendor") or "").split("/")[0]
+            if maker and maker.lower() not in cpu.lower():
+                cpu = f"{maker} {cpu}"  # Ampere Neoverse-N1, Cavium ThunderX2 99xx, NVIDIA Grace A02 CPU
             sockets, cores, threads = arch.get("nb_procs") or 0, arch.get("nb_cores") or 0, arch.get("nb_threads") or 0
             ram = round(((n.get("main_memory") or {}).get("ram_size") or 0) / 2**30)
+            vendor = str(proc.get("vendor") or "")
+            microarch = str(proc.get("microarchitecture") or "")
+            platform = str(arch.get("platform_type") or "")
+            devices = n.get("gpu_devices") or {}
+            gpus = len(devices)
+            if devices:
+                gpu_model = str(next(iter(devices.values())).get("model") or "")
     return {
         "site": site,
         "queues": c.get("queues") or ["default"],
@@ -95,6 +110,11 @@ def _reduce_cluster(site: str, c: dict) -> dict:
         "cores": cores,
         "threads": threads,
         "ram_gib": ram,
+        "vendor": vendor,
+        "microarch": microarch,
+        "arch": platform,
+        "gpus": gpus,
+        "gpu_model": gpu_model,
         "nodes": nodes,
     }
 
@@ -132,7 +152,7 @@ gga=$(sed -n 's/.*"default_gga":"\([^"]*\)".*/\1/p' "$d/user")
     values, files = unpack(res.out)
     if "now" not in values:
         raise FetchError("the gateway frontend did not answer as expected: " + (res.err.strip() or res.out[:200]))
-    ref = Reference(fetched=time.time(), me=values.get("me", ""))
+    ref = Reference(fetched=time.time(), me=values.get("me", ""), version=REFERENCE_VERSION)
     try:
         user = json.loads(files.get("user") or b"{}")
         group = json.loads(files.get("group") or b"{}")
@@ -173,11 +193,106 @@ def load_reference(remote: Remote, cfg: Config, *, refresh: bool = False, need: 
     if not refresh and path.exists():
         try:
             ref = Reference.from_json(path.read_text())
-            if ref.age < REFERENCE_MAX_AGE and all(c in ref.clusters for c in need):
+            fresh = ref.age < REFERENCE_MAX_AGE and ref.version == REFERENCE_VERSION
+            if fresh and all(c in ref.clusters for c in need):
                 return ref
         except (ValueError, TypeError):
             pass
     return fetch_reference(remote, cfg)
+
+
+# ------------------------------------------------------------------ history
+
+
+@dataclass
+class History:
+    """Clusters the user ran jobs on in the last HISTORY_DAYS days, per the OAR
+    databases of every site: cluster -> [start of the last job, number of jobs]."""
+
+    fetched: float = 0.0
+    used: dict[str, list] = field(default_factory=dict)
+    sites: list[str] = field(default_factory=list)  # sites whose database answered
+
+    @property
+    def age(self) -> float:
+        return time.time() - self.fetched
+
+    def last_used(self, cluster: str) -> int:
+        return int((self.used.get(cluster) or [0, 0])[0])
+
+    def jobs(self, cluster: str) -> int:
+        return int((self.used.get(cluster) or [0, 0])[1])
+
+    def recent(self, now: float, days: int) -> list[str]:
+        return [c for c, (t, _n) in self.used.items() if t and now - t <= days * 86400]
+
+
+# Starts from the user's own jobs (MATERIALIZED), so that the big tables are
+# only reached through their indexes: about 1 s per site, 5 s at nancy.
+HISTORY_SQL = (
+    "WITH mine AS MATERIALIZED (SELECT job_id, assigned_moldable_job, start_time FROM jobs "
+    "WHERE job_user = '$me' AND start_time > EXTRACT(EPOCH FROM now() - interval '{days} days') "
+    "AND assigned_moldable_job > 0) "
+    "SELECT r.cluster, MAX(m.start_time), COUNT(DISTINCT m.job_id) FROM mine m "
+    "JOIN assigned_resources a ON a.moldable_job_id = m.assigned_moldable_job "
+    "JOIN resources r ON r.resource_id = a.resource_id WHERE r.type = 'default' GROUP BY r.cluster"
+)
+
+
+def _history_path() -> Path:
+    return cache_dir() / "history.json"
+
+
+def history_script(sites: list[str], days: int = HISTORY_DAYS) -> str:
+    sql = HISTORY_SQL.format(days=int(days))
+    return (
+        FETCH_PRELUDE
+        + f'for s in {" ".join(sites)}; do\n'
+        + "  ( PGPASSWORD=read PGCONNECT_TIMEOUT=8 psql -h oardb.$s.grid5000.fr -U oarreader oar2 -At -F' ' "
+        + f'-c "{sql}" > "$d/hist_$s" 2>/dev/null || rm -f "$d/hist_$s" ) &\n'
+        + "done\n"
+        + FETCH_EPILOGUE
+    )
+
+
+def parse_history(files: dict[str, bytes]) -> History:
+    h = History(fetched=time.time())
+    for name, blob in files.items():
+        if not name.startswith("hist_"):
+            continue
+        h.sites.append(name[5:])
+        for line in blob.decode(errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+                t, n = int(parts[1]), int(parts[2])
+                old = h.used.get(parts[0])
+                h.used[parts[0]] = [max(t, old[0]), n + old[1]] if old else [t, n]
+    h.sites.sort()
+    return h
+
+
+def load_history(remote: Remote, cfg: Config, ref: Reference, *, refresh: bool = False) -> History:
+    """Which clusters the user has used recently; read once a day."""
+    path = _history_path()
+    if not refresh and path.exists():
+        try:
+            h = History(**json.loads(path.read_text()))
+            if h.age < HISTORY_MAX_AGE:
+                return h
+        except (ValueError, TypeError):
+            pass
+    try:
+        res = remote.script(_gateway(cfg, ref, remote), history_script(ref.sites), timeout=90)
+        _values, files = unpack(res.out)
+    except RemoteError:
+        files = {}
+    h = parse_history(files)
+    if h.sites:
+        try:
+            path.write_text(json.dumps(h.__dict__, separators=(",", ":")))
+        except OSError:
+            pass
+    return h
 
 
 # -------------------------------------------------------------------- state
@@ -353,9 +468,10 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
     return snap
 
 
-def save_recording(path: Path, ref: Reference, values: dict[str, str], files: dict[str, bytes]) -> None:
+def save_recording(path: Path, ref: Reference, values: dict[str, str], files: dict[str, bytes],
+                   clusters: Iterable[str] = ()) -> None:  # fmt: skip
     """Write everything a state fetch returned to one file, for replay."""
-    doc = {"reference": json.loads(ref.to_json()), "values": values,
+    doc = {"reference": json.loads(ref.to_json()), "values": values, "clusters": list(clusters),
            "files": {k: v.decode(errors="replace") for k, v in files.items()}}  # fmt: skip
     with gzip.open(path, "wt") as f:
         json.dump(doc, f, separators=(",", ":"))
@@ -365,6 +481,19 @@ def load_recording(path: Path) -> tuple[Reference, dict[str, str], dict[str, byt
     with gzip.open(path, "rt") as f:
         doc = json.load(f)
     return Reference(**doc["reference"]), doc["values"], {k: v.encode() for k, v in doc["files"].items()}
+
+
+def recorded_clusters(path: Path) -> list[str]:
+    """The clusters a recording was made for (older recordings: those of the sites it has)."""
+    with gzip.open(path, "rt") as f:
+        doc = json.load(f)
+    if doc.get("clusters"):
+        return list(doc["clusters"])
+    ref = Reference(**doc["reference"])
+    sites = {k[7:] for k in doc["files"] if k.startswith("status_")}
+    from . import selection
+
+    return selection.order([c for c, d in ref.clusters.items() if d["site"] in sites], ref.clusters, ref.access)
 
 
 def replay(path: Path, clusters: list[str], now: Optional[int] = None) -> tuple[Reference, Snapshot]:
@@ -392,7 +521,11 @@ def _visible_usage(snap: Snapshot) -> dict[str, dict]:
     return out
 
 
-def fetch_state(remote: Remote, cfg: Config, ref: Reference, clusters: list[str], *, quota: bool = True) -> Snapshot:
+def fetch_state(remote: Remote, cfg: Config, ref: Reference, clusters: list[str], *, quota: bool = True,
+                previous: Optional[Snapshot] = None) -> Snapshot:  # fmt: skip
+    """The state of the clusters' sites. Without quota, the daytime usage
+    read by usagepolicycheck is taken over from `previous` (it only changes
+    with the user's own jobs, and the tool is heavier than the rest)."""
     sites = []
     for c in clusters:
         s = ref.site_of(c)
@@ -412,8 +545,13 @@ def fetch_state(remote: Remote, cfg: Config, ref: Reference, clusters: list[str]
     if "now" not in values:
         raise FetchError("the gateway frontend did not answer as expected: " + (res.err.strip() or res.out[:200]))
     if os.environ.get("MAGRID_RECORD"):
-        save_recording(Path(os.environ["MAGRID_RECORD"]), ref, values, files)
+        save_recording(Path(os.environ["MAGRID_RECORD"]), ref, values, files, clusters)
     snap = build_snapshot(values, files, ref, clusters)
+    if not quota and previous is not None:
+        for cname, q in previous.quotas.items():
+            if q.known and cname in snap.quotas:
+                snap.quotas[cname] = copy.deepcopy(q)
+        snap.flagged = list(previous.flagged)
     if quota and quota_sites and "quota" not in files:
         snap.problems.append("usagepolicycheck did not run: today's earlier usage is unknown")
     return snap
