@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magrid"
+version = "0.1.0"
+description = "Book Grid'5000 machines without breaking the Usage Policy"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+magrid = "magrid.cli:main"
+
+[tool.setuptools]
+packages = ["magrid"]
+
+[tool.ruff]
+line-length = 130
+
+[tool.black]
+line-length = 130
