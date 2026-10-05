@@ -169,10 +169,7 @@ def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, no
             continue
         until = when.until
         w = avail.window_for(snap, offer, k, cfg.margin, prefer="short" if when.short else None, until=until,
-                             not_before=when.start or 0, now=now)  # fmt: skip
-        if w is not None and when.duration:
-            w = avail.window_for(snap, offer, k, cfg.margin, prefer="short" if when.short else None,
-                                 until=min(w.start + when.duration, until or w.end), not_before=when.start or 0, now=now)  # fmt: skip
+                             not_before=when.start or 0, duration=when.duration, now=now)  # fmt: skip
         if w is None:
             last_problem = _why_no_window(offer, k, now)
             continue
