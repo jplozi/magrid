@@ -102,3 +102,21 @@ class Parsing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WithoutUsagepolicycheck(unittest.TestCase):
+    def test_active_jobs_are_still_counted_and_the_doubt_is_stated(self):
+        ref, values, files = fetch.load_recording(FIXTURE)
+        del files["quota"]
+        snap = fetch.build_snapshot(values, files, ref, ["yeti", "chicoree"])
+        q = snap.quota("chicoree")
+        self.assertFalse(q.known)
+        # the job running on chicoree since 13:00:24 is seen: just under 6 hours of daytime on 64 cores
+        self.assertAlmostEqual(q.used[dt.date(2026, 10, 5)] / 64, 6 * 3600, delta=60)
+        from magrid import policy
+        from magrid import cal
+
+        day = dt.date(2026, 10, 6)
+        v = policy.judge_window(snap.now, cal.at(day, 9), cal.at(day, 10), cores=64, quota=snap.quota("yeti"), cluster="yeti")
+        self.assertTrue(v.ok)
+        self.assertEqual(v.findings[0].rule, "quota?")

@@ -338,13 +338,17 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             snap.quotas.update(quotas)
         except (ValueError, KeyError, TypeError) as e:
             snap.problems.append(f"usagepolicycheck gave no usable answer ({e}): today's earlier usage is unknown")
+    seen: Optional[dict] = None
     for cname, c in snap.clusters.items():
         if c.kind != "default":
             continue
         if cname in snap.quotas:
             c.quota_cores = snap.quotas[cname].cluster_cores
         else:
-            snap.quotas[cname] = policy.Quota(c.quota_cores, known=False)
+            # usagepolicycheck gave nothing: count at least the user's jobs that are still visible
+            if seen is None:
+                seen = _visible_usage(snap)
+            snap.quotas[cname] = policy.Quota(c.quota_cores, dict(seen.get(cname, {})), known=False)
         snap.quotas[cname].node_cores = c.cores_per_node
     return snap
 
@@ -370,6 +374,22 @@ def replay(path: Path, clusters: list[str], now: Optional[int] = None) -> tuple[
     if now is not None:
         snap.now = now
     return ref, snap
+
+
+def _visible_usage(snap: Snapshot) -> dict[str, dict]:
+    """Daytime core-seconds per cluster and day of the user's active jobs, by our own count."""
+    from . import checker
+
+    jobs = []
+    for j in snap.jobs:
+        r = j.resv
+        if r.start and j.clusters:
+            jobs.append(checker.Job(str(r.job_id), "me", r.submitted, r.start, r.end, r.walltime, dict(j.clusters),
+                                    queue=r.queue, extensions=list(j.extensions), types=r.types))  # fmt: skip
+    out: dict[str, dict] = {}
+    for (_user, day, cname), u in checker.aggregate(jobs).items():
+        out.setdefault(cname, {})[day] = u.restricted_cputime
+    return out
 
 
 def fetch_state(remote: Remote, cfg: Config, ref: Reference, clusters: list[str], *, quota: bool = True) -> Snapshot:
