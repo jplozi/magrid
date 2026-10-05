@@ -239,7 +239,8 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         else:
             l2 = Line().add("limit reached", BAD.on(bg))
     elif w.start <= offer.slot.start + 120:
-        l2 = Line().add(f"{ARROW}{fmt_when(w.end, now)}", (DIM if usual else WARN).on(bg))
+        quiet = St(252) if focus else DIM
+        l2 = Line().add(f"{ARROW}{fmt_when(w.end, now)}", (quiet if usual else WARN).on(bg))
     else:
         l2 = Line().add(f"{fmt_when(w.start, now)}{ARROW}{fmt_clock(w.end)}", WARN.on(bg))
     return l1.clip(width).pad(width, St(bg=bg)), l2.clip(width).pad(width, St(bg=bg))
@@ -319,8 +320,8 @@ def board(
     for s in slots:
         a, b = slot_header(s, now, cfg.margin)
         band = {"day": BAND_DAY, "night": BAND_NIGHT, "weekend": BAND_WEEKEND, "holiday": BAND_WEEKEND}[s.period.flavour]
-        h1.add(" ").extend_line(cell(" " + a, CELL_W, St(WHITE, band, bold=True)))
-        h2.add(" ").extend_line(cell(" " + b, CELL_W, St(GREY, BG_HEAD)))
+        h1.add(" ").extend_line(cell(" " + a, CELL_W, St(WHITE, band, bold=True), fill=True))
+        h2.add(" ").extend_line(cell(" " + b, CELL_W, St(GREY, BG_HEAD), fill=True))
     out += [h1, h2]
     span = len(slots) * (CELL_W + 1) - 1
     for c in clusters:
@@ -390,9 +391,11 @@ _KIND_BG = {"maint": BG_MAINT, "mine": BG_MINE, "mine_be": BG_MINE, "team": BG_T
             "dead": BG_DEAD, "past": None}  # fmt: skip
 
 
-def _bg_at(kind: str, ts: int) -> Optional[int]:
+def _bg_at(kind: str, ts: int, daytime: bool = True) -> Optional[int]:
+    """Background of a timeline cell. daytime: draw free daytime differently
+    (only where the day and night rules apply)."""
     if kind == "free":
-        return BG_FREE_DAY if cal.period_at(ts).is_day else BG_FREE
+        return BG_FREE_DAY if (daytime and cal.period_at(ts).is_day) else BG_FREE
     return _KIND_BG.get(kind)
 
 
@@ -440,7 +443,7 @@ def gantt_axis(t0: int, step: int, cols: int, label_w: int) -> list[Line]:
         color = {"day": BAND_DAY, "night": BAND_NIGHT, "weekend": BAND_WEEKEND, "holiday": BAND_WEEKEND}[p.flavour]
         name = {"day": "day · quota", "night": "night", "weekend": "weekend", "holiday": "holiday"}[p.flavour]
         text = name if len(name) + 2 <= n else (name.split(" ")[0] if len(name.split(" ")[0]) + 2 <= n else "")
-        band.extend_line(cell(" " + text if text else "", n, St(WHITE, color)))
+        band.extend_line(cell(" " + text if text else "", n, St(WHITE, color), fill=True))
         j += n
     return [days, hours, band]
 
@@ -448,23 +451,24 @@ def gantt_axis(t0: int, step: int, cols: int, label_w: int) -> list[Line]:
 _PLAIN_FILL = {"free": " ", "busy": "█", "team": "█", "mine": "#", "mine_be": "#", "maint": "M", "be": "░", "soft": "▒", "past": " "}
 
 
-def _fill(kind: str, ts: int, plain: bool) -> str:
+def _fill(kind: str, ts: int, plain: bool, daytime: bool = True) -> str:
     """The character of a full timeline cell. In colour the background says it
     all; without colour the character has to."""
     if plain:
         if kind == "free":
-            return "·" if cal.period_at(ts).is_day else " "
+            return "·" if (daytime and cal.period_at(ts).is_day) else " "
         return _PLAIN_FILL.get(kind, " ")
     return {"be": "░", "soft": "▒"}.get(kind, " ")
 
 
-def gantt_row(node: Node, snap: Snapshot, team: set[str], t0: int, step: int, cols: int, plain: bool = False) -> Line:
+def gantt_row(node: Node, snap: Snapshot, team: set[str], t0: int, step: int, cols: int, plain: bool = False,
+              daytime: bool = True) -> Line:
     """The timeline of one node: one character per `step` seconds, with
     eighth-of-a-cell precision where a job starts or ends."""
     now = snap.now
     if not node.usable:
         text = f" {node.hard}" + (f": {node.comment}" if node.comment else "")
-        return cell(text, cols, St(WHITE, BG_DEAD))
+        return cell(text, cols, St(WHITE, BG_DEAD), fill=True)
     resvs = [(r, _kind_of(r, snap, team)) for r in node.resvs if r.start and r.end > t0]
 
     def at(ts: int) -> tuple[str, Optional[Resv]]:
@@ -489,18 +493,18 @@ def gantt_row(node: Node, snap: Snapshot, team: set[str], t0: int, step: int, co
         kinds = [k for k, _ in col]
         if all(k == kinds[0] for k in kinds):
             kind, who = col[0]
-            cells.append((_fill(kind, ts, plain), St(GREY if kind in ("be", "soft") else FAINT_FG, _bg_at(kind, ts))))
+            cells.append((_fill(kind, ts, plain, daytime), St(GREY if kind in ("be", "soft") else FAINT_FG, _bg_at(kind, ts, daytime))))
             owner.append(who)
             continue
         changes = [i for i in range(1, sub) if kinds[i] != kinds[i - 1]]
         if plain:
             kind, who = max(col, key=lambda kw: (kinds.count(kw[0]), _KIND_RANK.get(kw[0], 0)))
-            cells.append((_fill(kind, ts, plain), PLAIN))
+            cells.append((_fill(kind, ts, plain, daytime), PLAIN))
             owner.append(who)
         elif len(changes) == 1:
             i = changes[0]
             left, right = col[0][0], col[-1][0]
-            lbg, rbg = _bg_at(left, ts), _bg_at(right, ts + step - 1)
+            lbg, rbg = _bg_at(left, ts, daytime), _bg_at(right, ts + step - 1, daytime)
             if lbg is None:  # nothing drawn on the left: a right-hand block is not available, approximate
                 cells.append((" ", St(bg=rbg if i <= sub // 2 else None)))
             else:
@@ -508,7 +512,7 @@ def gantt_row(node: Node, snap: Snapshot, team: set[str], t0: int, step: int, co
             owner.append(col[-1][1] if i <= sub // 2 else col[0][1])
         else:
             kind, who = max(col, key=lambda kw: (kinds.count(kw[0]), _KIND_RANK.get(kw[0], 0)))
-            cells.append((" ", St(bg=_bg_at(kind, ts))))
+            cells.append((" ", St(bg=_bg_at(kind, ts, daytime))))
             owner.append(who)
     # write who holds what on top of the bars, where there is room
     j = 0
@@ -581,7 +585,7 @@ def gantt(snap: Snapshot, cfg: Config, c: Cluster, width: int, *, start: Optiona
     for n in nodes:
         mark, st = _state_mark(n)
         ln = Line().add(" ").add(mark, st).add(" ").extend_line(cell(n.name, label_w - 3, PLAIN if n.usable else DIM))
-        ln.extend_line(gantt_row(n, snap, team, t0, step, cols, plain))
+        ln.extend_line(gantt_row(n, snap, team, t0, step, cols, plain, daytime=(c.kind == "default")))
         out.append(ln)
     if hidden:
         out.append(line(f"   ... and {hidden} more nodes (magrid gantt {c.name})", DIM))

@@ -41,13 +41,13 @@ GREY = 245
 FAINT = 240
 WHITE = 255
 BG_FREE = 22
-BG_FREE_DAY = 28
-BG_BUSY = 240
+BG_FREE_DAY = 65
+BG_BUSY = 238
 BG_MINE = 25
 BG_TEAM = 30
 BG_MAINT = 94
-BG_SOFT = 237
-BG_BE = 236
+BG_SOFT = 236
+BG_BE = 235
 BG_DEAD = 52
 BG_SELECT = 24
 BG_HEAD = 236
@@ -133,11 +133,15 @@ def line(text: str = "", st: St = PLAIN) -> Line:
     return Line().add(text, st)
 
 
-def cell(text: str, width: int, st: St = PLAIN, align: str = "<") -> Line:
-    """Text in a fixed-width cell, cut with an ellipsis when too long."""
+def cell(text: str, width: int, st: St = PLAIN, align: str = "<", fill: bool = False) -> Line:
+    """Text in a fixed-width cell, cut with an ellipsis when too long. With
+    fill, the whole cell takes the style (a coloured band), not just the text."""
     if len(text) > width:
         text = text[: max(0, width - 1)] + "…" if width > 1 else text[:width]
     pad = width - len(text)
+    if fill:
+        left = pad if align == ">" else pad // 2 if align == "^" else 0
+        return Line().add(" " * left + text + " " * (pad - left), st)
     if align == ">":
         return Line().add(" " * pad).add(text, st)
     if align == "^":
