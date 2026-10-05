@@ -13,7 +13,7 @@ from typing import Optional
 from . import __version__, audit, avail, config, fetch, oar, plan, policy, verify, views
 from .model import Snapshot
 from .remote import Remote, RemoteError
-from .term import BAD, BADB, DIM, HEAD, OK, OKB, TITLE, WARN, Line, emit, line, term_width, use_color, wrap
+from .term import BAD, BADB, DIM, HEAD, OK, OKB, TITLE, WARN, Line, emit, line, set_theme, term_width, use_color, wrap
 from .timefmt import TimeError, fmt_dur, fmt_ts, fmt_when, parse_duration, parse_time
 
 
@@ -23,6 +23,7 @@ class App:
     def __init__(self, args):
         self.args = args
         self.cfg = config.load()
+        set_theme(self.cfg.theme)
         if getattr(args, "clusters", None):
             self.cfg.clusters = [c for part in args.clusters for c in part.replace(",", " ").split()]
         self.remote = Remote(self.cfg)

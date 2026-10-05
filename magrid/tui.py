@@ -19,7 +19,7 @@ from typing import Optional
 from . import avail, fetch, oar, plan, policy, verify, views
 from .model import Snapshot
 from .remote import RemoteError
-from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, emit, line, wrap
+from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, emit, line, text_colour, wrap
 from .timefmt import fmt_dur, fmt_ts, fmt_when
 
 REFRESH_EVERY = 60  # seconds
@@ -84,7 +84,7 @@ class Screen:
         if st.rev:
             a |= curses.A_REVERSE
         if self.colors and (st.fg is not None or st.bg is not None):
-            key = (-1 if st.fg is None else st.fg, -1 if st.bg is None else st.bg)
+            key = (-1 if st.fg is None else text_colour(st.fg, st.bg), -1 if st.bg is None else st.bg)
             n = self.pairs.get(key)
             if n is None:
                 n = len(self.pairs) + 1
