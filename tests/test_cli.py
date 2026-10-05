@@ -34,6 +34,7 @@ class FakeFrontend:
         self.here = None
         self.ref, self.values, self.files = fetch.load_recording(FIXTURE)
         self.commands = []  # (site, argv) of everything that is not a read
+        self.scripts = []
         self.jobs = {}
         self.next_id = 9000001
         self.refuse = None
@@ -42,9 +43,19 @@ class FakeFrontend:
     def host(self, site):
         return f"{site}.g5k"
 
+    # clusters "used recently" by the user, as the OAR databases would answer
+    history = {"grenoble": "yeti {t} 5\ndahu {t} 9\n", "luxembourg": "larochette {t} 36\n",
+               "nancy": "grdix {t} 19\ngranite {t} 2\ngrosminet {t} 2\n", "rennes": "roazhon15 {t} 34\n",
+               "lille": "chicoree {old} 1\n"}  # fmt: skip
+
     def script(self, site, script, timeout=0):
+        self.scripts.append(script)
         if "user_" in script and "status_" not in script:
             return Result(0, framed({"now": self.values["now"], "me": "jdoe"}, {}), "")
+        if "hist_" in script:
+            t, old = int(time.time()) - 2 * 86400, int(time.time()) - 100 * 86400
+            files = {f"hist_{s}": text.format(t=t, old=old).encode() for s, text in self.history.items()}
+            return Result(0, framed({"now": self.values["now"], "me": "jdoe"}, files), "")
         files = dict(self.files)
         if self.alone_on:
             site = self.alone_on.split(".")[1]
@@ -114,6 +125,7 @@ class Offline(unittest.TestCase):
             # the reference is "cached": no need to fetch it
             ref = self.front.ref
             ref.fetched = time.time()
+            ref.version = fetch.REFERENCE_VERSION
             (fetch.cache_dir() / "reference.json").write_text(ref.to_json())
             return self.front
 
@@ -261,3 +273,75 @@ class Waiting(Offline):
         self.assertEqual(rc, 1)
         self.assertIn("With --wait", out)
         self.assertEqual(self.front.commands, [])
+
+
+class Board(Offline):
+    """Which clusters: the board learnt from history, add and hide, groups."""
+
+    def config_text(self):
+        from magrid import config
+
+        p = config.config_path()
+        return p.read_text() if p.exists() else ""
+
+    def test_the_board_is_what_you_used_lately(self):
+        rc, out = self.run_cli("board")
+        self.assertEqual(rc, 0, out)
+        rows = [ln.split()[0] for ln in out.splitlines() if ln.startswith(" ") and len(ln.split()) > 2 and ln.split()[1].isdigit()]
+        # used two days ago: in; chicoree, last used 100 days ago: out; reservable first, then abaca
+        self.assertEqual(rows, ["dahu", "yeti", "larochette", "granite", "grdix", "grosminet", "roazhon15"])
+        self.assertTrue(any("hist_" in s for s in self.front.scripts))
+
+    def test_history_is_read_once_a_day(self):
+        self.run_cli("board")
+        self.run_cli("board")
+        self.assertEqual(sum("hist_" in s for s in self.front.scripts), 0)  # the second run uses the cache
+        rc, out = self.run_cli("jobs")
+        self.assertEqual(rc, 0)
+
+    def test_add_and_hide(self):
+        rc, out = self.run_cli("add", "chicoree")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("added: chicoree", out)
+        self.assertIn("add = chicoree", self.config_text())
+        self.assertIn("clusters = auto", self.config_text())
+        rc, out = self.run_cli("hide", "yeti", "grosminet")
+        self.assertIn("hidden: yeti grosminet", out)
+        self.assertIn("hide = yeti grosminet", self.config_text())
+        rc, out = self.run_cli("board")
+        rows = [ln.split()[0] for ln in out.splitlines() if ln.startswith(" ") and len(ln.split()) > 2 and ln.split()[1].isdigit()]
+        self.assertEqual(rows, ["dahu", "chicoree", "larochette", "granite", "grdix", "roazhon15"])
+        rc, out = self.run_cli("add", "yeti")  # un-hides
+        self.assertIn("hide = grosminet", self.config_text())
+        self.assertNotIn("hide = yeti", self.config_text())
+
+    def test_groups_and_sites(self):
+        rc, out = self.run_cli("board", "luxembourg")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("larochette", out)
+        self.assertNotIn(" yeti ", out)
+        rc, out = self.run_cli("board", "nowhere")
+        self.assertEqual(rc, 2)
+        self.assertIn("unknown cluster, node, site or group", out)
+        rc, out = self.run_cli("gantt", "-c", "nancy")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("grdix", out)
+
+    def test_catalogue(self):
+        rc, out = self.run_cli("clusters")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("8 clusters you can use", out)
+        self.assertIn(" ✓ yeti", out)
+        self.assertIn("   chicoree", out)  # not on the board
+        rc, out = self.run_cli("clusters", "nancy", "p3")
+        names = [ln.split()[1] if ln.startswith(" ✓") else ln.split()[0] for ln in out.splitlines()[1:] if ln.strip() and not ln.startswith(" 2 ")]
+        self.assertEqual(sorted(n for n in names if n in ("grdix", "grosminet", "granite")), ["grdix", "grosminet"])
+
+    def test_booking_puts_the_cluster_on_the_board(self):
+        rc, out = self.run_cli("hide", "yeti")
+        rc, out = self.run_cli("book", "yeti", "--tonight", "-y")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("yeti is now on your board", out)
+        self.assertNotIn("yeti", self.config_text().split("hide =")[1].splitlines()[0])
+        rc, out = self.run_cli("book", "dahu", "--tonight", "-n")  # a dry run changes nothing
+        self.assertNotIn("now on your board", out)

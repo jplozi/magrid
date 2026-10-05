@@ -12,19 +12,22 @@ Booking leaves the full-screen mode for a moment and runs the same code as
 from __future__ import annotations
 
 import curses
+import os
 import threading
 import time
+from dataclasses import dataclass
 from typing import Optional
 
-from . import avail, fetch, oar, plan, policy, verify, views
+from . import avail, fetch, oar, plan, policy, selection, verify, views
 from .model import Snapshot
 from .remote import RemoteError
 from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, emit, line, text_colour, wrap
 from .timefmt import fmt_dur, fmt_ts, fmt_when
 
 REFRESH_EVERY = 60  # seconds
-KEYS = "arrows move · + - nodes · m max · Enter book · g timeline · j jobs · r refresh · ? help · q quit"
-KEYS_SHORT = "arrows · + - nodes · Enter book · g timeline · j jobs · ? help · q quit"
+QUOTA_EVERY = 600  # usagepolicycheck only changes with your own jobs: read it every 10 minutes
+KEYS = "arrows move · + - nodes · m max · Enter book · a add · x hide · g timeline · j jobs · ? help · q quit"
+KEYS_SHORT = "arrows · + - nodes · Enter book · a add · x hide · ? help · q quit"
 KEYS_TINY = "+ - · Enter book · ? help · q quit"
 
 HELP = """\
@@ -43,6 +46,8 @@ HELP = """\
    1 to 9            that many nodes
    Enter or b        review the exact commands, then book
    c                 clear all choices
+   a                 add a cluster to the board: type to search (arm, lyon, gpu, epyc, ...)
+   x                 hide the focused cluster from the board (a brings it back)
    g                 timeline of the focused cluster, full height (g again to go back)
    j                 your jobs: d deletes one, x extends one
    s                 show only the current period for "now" (do not run on through 19:00 or 09:00)
@@ -113,6 +118,14 @@ class Screen:
             x += len(text)
 
 
+@dataclass
+class Picker:
+    """The a key: a searchable list of every cluster."""
+
+    text: str = ""
+    row: int = 0
+
+
 class Board:
     def __init__(self, app, stdscr):
         self.app = app
@@ -134,13 +147,23 @@ class Board:
         self.lock = threading.Lock()
         self.names: dict[str, str] = dict(app.names)
         self.names_asked: set[str] = set()
+        self.on_board: list[str] = app.board()
+        self.picker: Optional[Picker] = None
+        self.pending_focus: Optional[str] = None
+        self.again = False
+        self.quota_at = time.time()  # usagepolicycheck is read again every QUOTA_EVERY seconds, not every refresh
+        self.quota_sites = self.default_sites()
         self.recompute()
 
     # ----------------------------------------------------------- data
 
+    def default_sites(self) -> set[str]:
+        ref = self.app.ref
+        return {ref.site_of(c) for c in self.on_board if c in ref.clusters and "default" in ref.clusters[c]["queues"]}
+
     def recompute(self) -> None:
         snap, cfg = self.snap, self.app.cfg
-        self.clusters = [snap.clusters[c] for c in cfg.clusters if c in snap.clusters]
+        self.clusters = [snap.clusters[c] for c in self.on_board if c in snap.clusters]
         _h, w = self.scr.getmaxyx()
         self.width = max(60, w)
         self.slots = views.visible_slots(avail.slots(snap.now), self.width)
@@ -157,14 +180,22 @@ class Board:
             else:
                 self.picks[key] = min(self.picks[key], self.limit(o))
 
-    def refresh_async(self) -> None:
-        if self.loading or self.app.read_only:
+    def refresh_async(self, quota: bool = False) -> None:
+        if self.app.read_only:
+            return
+        if self.loading:
+            self.again = True  # the board changed while reading: read again right after
             return
         self.loading = True
+        sites = self.default_sites()
+        quota = quota or time.time() - self.quota_at > QUOTA_EVERY or not sites <= self.quota_sites
+        if quota:
+            self.quota_at, self.quota_sites = time.time(), sites
+        names, previous = list(self.on_board), self.snap
 
         def work():
             try:
-                snap = fetch.fetch_state(self.app.remote, self.app.cfg, self.app.ref, self.app.cfg.clusters)
+                snap = fetch.fetch_state(self.app.remote, self.app.cfg, self.app.ref, names, quota=quota, previous=previous)
                 with self.lock:
                     self.fresh = snap
             except (RemoteError, fetch.FetchError, OSError) as e:
@@ -182,9 +213,16 @@ class Board:
         if snap is not None:
             self.loading = False
             self.loaded_at = time.time()
+            if self.again:
+                self.again = False
+                self.refresh_async()
             self.app.snap = self.snap = snap
             self.app.offset = time.time() - snap.now
             self.recompute()
+            name, self.pending_focus = self.pending_focus, None
+            if name and name in [c.name for c in self.clusters]:
+                self.row = [c.name for c in self.clusters].index(name)
+                self.say(f"{name} added to the board", OKB)
 
     def ask_names(self) -> None:
         """Full names of the people on the focused cluster, fetched in the background."""
@@ -270,7 +308,9 @@ class Board:
             self.screen.put(y, ln)
             y += 1
         y += 1
-        if self.pane == "help":
+        if self.picker is not None:
+            self.draw_picker(y, h)
+        elif self.pane == "help":
             for raw in HELP.splitlines():
                 self.screen.put(y, line(raw, HEAD if raw.strip().isupper() else PLAIN))
                 y += 1
@@ -300,6 +340,9 @@ class Board:
                 if len(shown) < n:
                     self.screen.put(y, line(f"   {n - len(shown)} more clusters: move up or down", DIM))
                     y += 1
+                if not self.clusters:
+                    self.screen.put(y + 1, line("   Your board is empty. Press a to add clusters (try arm, lyon or gpu).", WARN))
+                    y += 2
                 y += 1
             y = self.draw_lower(y, h)
         self.draw_status(h)
@@ -398,7 +441,7 @@ class Board:
         curses.reset_prog_mode()
         self.scr.clear()
         self.loaded_at = 0  # force a refresh
-        self.refresh_async()
+        self.refresh_async(quota=True)
 
     def book(self) -> None:
         picks = dict(self.picks)
@@ -494,10 +537,101 @@ class Board:
 
         self.leave(action)
 
+    # ---------------------------------------------------- board edits
+
+    def add_cluster(self, name: str) -> None:
+        if name in self.on_board:
+            self.row = self.on_board.index(name) if name in [c.name for c in self.clusters] else self.row
+            self.say(f"{name} is already on the board", DIM)
+            return
+        if not self.app.read_only:
+            self.app.on_board([name])
+        self.on_board = self.app.board() if not self.app.read_only else self.on_board + [name]
+        if name in self.snap.clusters:
+            self.recompute()
+            self.row = [c.name for c in self.clusters].index(name)
+            self.say(f"{name} added to the board", OKB)
+        else:
+            self.say(f"{name} added; reading {self.app.ref.site_of(name)}…", OKB)
+            self.pending_focus = name
+        self.refresh_async()
+
+    def hide_focused(self) -> None:
+        if not self.clusters:
+            return
+        name = self.clusters[self.row].name
+        if not self.app.read_only:
+            self.app.off_board([name])
+        self.on_board = [c for c in self.on_board if c != name]
+        for key in [k for k in self.picks if k[0] == name]:
+            del self.picks[key]
+        self.recompute()
+        self.say(f"{name} hidden from the board (a brings it back)", DIM)
+
+    def picker_names(self) -> list[str]:
+        ref = self.app.ref
+        return selection.search(self.picker.text, ref.clusters, ref.access, first=self.on_board)
+
+    def picker_key(self, ch: int) -> None:
+        p = self.picker
+        names = self.picker_names()
+        if ch == 27:  # Esc
+            self.picker = None
+        elif ch in (curses.KEY_ENTER, 10, 13):
+            if names:
+                self.picker = None
+                self.add_cluster(names[min(p.row, len(names) - 1)])
+        elif ch == curses.KEY_UP:
+            p.row = max(0, p.row - 1)
+        elif ch == curses.KEY_DOWN:
+            p.row = min(max(0, len(names) - 1), p.row + 1)
+        elif ch == curses.KEY_PPAGE:
+            p.row = max(0, p.row - 10)
+        elif ch == curses.KEY_NPAGE:
+            p.row = min(max(0, len(names) - 1), p.row + 10)
+        elif ch in (curses.KEY_BACKSPACE, 127, 8):
+            p.text, p.row = p.text[:-1], 0
+        elif ch == 21:  # Ctrl-U
+            p.text, p.row = "", 0
+        elif 32 <= ch < 127:
+            p.text, p.row = p.text + chr(ch), 0
+
+    def draw_picker(self, y: int, h: int) -> int:
+        ref, hist = self.app.ref, self.app.history()
+        names = self.picker_names()
+        p = self.picker
+        p.row = min(p.row, max(0, len(names) - 1))
+        title = Line().add(" ADD A CLUSTER ", St(255, 24, bold=True)).add("   search: ", DIM).add(p.text, HEAD).add("▏", OKB)
+        title.add("    try arm, lyon, gpu, epyc, p3, 4-socket", DIM)
+        self.screen.put(y, title.clip(self.width))
+        y += 2
+        self.screen.put(y, views.catalogue_head(self.width))
+        y += 1
+        room = max(1, h - y - 3)
+        first = max(0, min(p.row - room // 2, len(names) - room))
+        board = set(self.on_board)
+        now = time.time()
+        for i, n in enumerate(names[first : first + room]):
+            ln = views.catalogue_line(n, ref.clusters[n], ref.access, on_board=n in board, last_used=hist.last_used(n),
+                                      now=now, width=self.width, selected=(first + i == p.row))  # fmt: skip
+            self.screen.put(y, ln)
+            y += 1
+        if not names:
+            self.screen.put(y, line("   nothing matches", DIM))
+            y += 1
+        y += 1
+        more = f"{len(names)} cluster{'s' if len(names) != 1 else ''} · ✓ on the board"
+        self.screen.put(y, line(f" {more} · ↑↓ choose · Enter add · Esc close", DIM))
+        return y + 1
+
     # ------------------------------------------------------------ loop
 
     def key(self, ch: int) -> bool:
         """Handle a key. False to quit."""
+        if self.picker is not None:
+            self.picker_key(ch)
+            return True
+        self.say("")  # a message stays until the next key
         if ch in (ord("q"), ord("Q")):
             return False
         if ch == curses.KEY_RESIZE:
@@ -553,6 +687,11 @@ class Board:
             self.set_pick(ch - ord("0"))
         elif ch in (ord("c"), ord("C")):
             self.picks.clear()
+        elif ch in (ord("a"), ord("A")):
+            self.picker = Picker()
+            self.say("")
+        elif ch in (ord("x"), ord("X"), curses.KEY_DC):
+            self.hide_focused()
         elif ch in (ord("s"), ord("S")):
             self.short = not self.short
         elif ch in (ord("g"), ord("G")):
@@ -561,8 +700,6 @@ class Board:
             self.book()
         else:
             return True
-        if ch not in (ord("+"), ord("="), ord("-"), ord("_"), ord(" "), ord("m"), ord("M")) and not (ord("0") <= ch <= ord("9")):
-            self.say("")
         return True
 
     def loop(self) -> None:
@@ -590,6 +727,8 @@ def run(app) -> int:
     print("magrid: reading the platform…", end="", flush=True)
     app.load()
     print("\r" + " " * 40 + "\r", end="", flush=True)
+
+    os.environ.setdefault("ESCDELAY", "25")  # Esc closes things at once, not after a second
 
     def main(stdscr):
         Board(app, stdscr).loop()

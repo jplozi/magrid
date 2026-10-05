@@ -10,10 +10,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from . import __version__, audit, avail, config, fetch, oar, plan, policy, verify, views
+from . import __version__, audit, avail, config, fetch, oar, plan, policy, selection, verify, views
 from .model import Snapshot
 from .remote import Remote, RemoteError
-from .term import BAD, BADB, DIM, HEAD, OK, OKB, TITLE, WARN, Line, emit, line, set_theme, term_width, use_color, wrap
+from .term import BAD, BADB, DIM, HEAD, OK, OKB, PLAIN, TITLE, WARN, Line, emit, line, set_theme, term_width, use_color, wrap
 from .timefmt import TimeError, fmt_dur, fmt_ts, fmt_when, parse_duration, parse_time
 
 
@@ -24,9 +24,9 @@ class App:
         self.args = args
         self.cfg = config.load()
         set_theme(self.cfg.theme)
-        if getattr(args, "clusters", None):
-            self.cfg.clusters = [c for part in args.clusters for c in part.replace(",", " ").split()]
+        self.words: list[str] = [c for part in (getattr(args, "clusters", None) or []) for c in part.replace(",", " ").split()]
         self.remote = Remote(self.cfg)
+        self._history: Optional[fetch.History] = None
         self.replay: Optional[Path] = Path(args.replay) if getattr(args, "replay", None) else None
         self.ref: Optional[fetch.Reference] = None
         self.snap: Optional[Snapshot] = None
@@ -45,8 +45,49 @@ class App:
             return self.snap.now
         return int(time.time() - self.offset)
 
+    def history(self) -> fetch.History:
+        """The clusters the user ran jobs on recently (read once a day)."""
+        if self._history is None:
+            if self.replay is not None:
+                self._history = fetch.History()
+            else:
+                path = fetch._history_path()
+                stale = not path.exists() or time.time() - path.stat().st_mtime > fetch.HISTORY_MAX_AGE
+                if stale and sys.stderr.isatty():
+                    print("magrid: reading which clusters you used recently (once a day)…", file=sys.stderr, end="\r", flush=True)
+                self._history = fetch.load_history(self.remote, self.cfg, self.reference())
+                if stale and sys.stderr.isatty():
+                    print(" " * 70, file=sys.stderr, end="\r", flush=True)
+        return self._history
+
+    def reference(self) -> fetch.Reference:
+        if self.ref is None:
+            _known_clusters(self)
+        return self.ref
+
+    def recent(self) -> list[str]:
+        return self.history().recent(self.now() if self.snap else time.time(), selection.RECENT_DAYS)
+
+    def board(self) -> list[str]:
+        """The clusters to show: -c words if given, else the board of the configuration."""
+        ref = self.reference()
+        if self.words:
+            return self.pick(self.words).clusters
+        if self.replay is not None and self.cfg.clusters == ["auto"]:
+            return fetch.recorded_clusters(self.replay)
+        recent = self.recent() if self.cfg.clusters == ["auto"] else []
+        return selection.board(self.cfg, ref.clusters, ref.access, recent)
+
+    def pick(self, words: list[str]) -> selection.Picked:
+        ref = self.reference()
+        try:
+            recent = self.recent() if any(w.lower() == "recent" for part in words for w in part.split()) else []
+            return selection.resolve(words, ref.clusters, ref.access, sites=ref.sites, recent=recent)
+        except selection.SelectionError as e:
+            raise SystemExit(f"magrid: {e}")
+
     def load(self, clusters: Optional[list[str]] = None, *, quota: bool = True) -> Snapshot:
-        want = list(clusters if clusters is not None else self.cfg.clusters)
+        want = list(clusters if clusters is not None else self.board())
         if self.replay is not None:
             now = None
             if getattr(self.args, "at", None):
@@ -81,23 +122,31 @@ class App:
         return not (use_color() if self.color is None else self.color)
 
     def expand(self, names: list[str]) -> tuple[list[str], list[str]]:
-        """Split what the user typed into cluster names and node names."""
-        ref_clusters = self.ref.clusters if self.ref else {}
-        clusters, nodes = [], []
-        for raw in names:
-            for name in raw.replace(",", " ").split():
-                name = name.lower().split(".")[0]
-                if name in ref_clusters or self.ref is None:
-                    clusters.append(name)
-                else:
-                    base = name.rsplit("-", 1)[0]
-                    if base in ref_clusters:
-                        nodes.append(name)
-                        if base not in clusters:
-                            clusters.append(base)
-                    else:
-                        raise SystemExit(f"magrid: unknown cluster or node: {name}")
-        return clusters, nodes
+        """What the user typed (clusters, nodes, sites, groups) as cluster and node names."""
+        p = self.pick(names)
+        return p.clusters, p.nodes
+
+    def on_board(self, names: list[str]) -> list[str]:
+        """Put clusters on the board (un-hiding them if needed). Returns those that were not there."""
+        board = self.board() if not self.words else []
+        new = [n for n in names if n not in board]
+        if not new:
+            return []
+        add = list(self.cfg.add) + [n for n in new if n not in self.cfg.add and n not in self.cfg.clusters]
+        hide = [h for h in self.cfg.hide if h not in new]
+        self.cfg.add, self.cfg.hide = add, hide
+        config.set_lines({"add": " ".join(add), "hide": " ".join(hide)}, self.cfg.path)
+        return new
+
+    def off_board(self, names: list[str]) -> list[str]:
+        """Hide clusters from the board. Returns those that were on it."""
+        board = self.board() if not self.words else []
+        gone = [n for n in names if n in board]
+        add = [a for a in self.cfg.add if a not in names]
+        hide = list(self.cfg.hide) + [n for n in names if n not in self.cfg.hide]
+        self.cfg.add, self.cfg.hide = add, hide
+        config.set_lines({"add": " ".join(add), "hide": " ".join(hide)}, self.cfg.path)
+        return gone
 
 
 def _known_clusters(app: App) -> list[str]:
@@ -118,7 +167,12 @@ def build_offers(app: App, clusters, slots):
 def cmd_board(app: App, args) -> int:
     names = args.names or []
     _known_clusters(app)
-    clusters, _ = app.expand(names) if names else (app.cfg.clusters, [])
+    clusters, _ = app.expand(names) if names else (app.board(), [])
+    if not clusters:
+        app.out([line(" Your board is empty: no cluster used in the last two months, and none added.", WARN),
+                 line(" Add some with: magrid add yeti dahu   (or magrid add arm, magrid add lyon)", DIM),
+                 line(" See them all with: magrid clusters", DIM)])  # fmt: skip
+        return 1
     snap = app.load(clusters)
     width = app.width
     cs = [snap.clusters[c] for c in clusters if c in snap.clusters]
@@ -137,6 +191,66 @@ def cmd_board(app: App, args) -> int:
         lines += [Line()] + views.gantt_legend(app.plain)
     lines += [Line(), line(" magrid book yeti:2 --tonight    magrid gantt dahu    magrid who roazhon15    magrid help", DIM)]
     app.out(lines)
+    return 0
+
+
+# ----------------------------------------------------------- clusters, add, hide
+
+
+def cmd_clusters(app: App, args) -> int:
+    """The clusters of all sites. Words narrow the list (all must match)."""
+    ref = app.reference()
+    hist = app.history() if app.replay is None else fetch.History()
+    board = set(app.board())
+    text = " ".join(args.words or [])
+    names = selection.search(text, ref.clusters, ref.access, include_unusable=args.all, first=board)
+    if not text:
+        names = sorted(names, key=lambda n: (ref.clusters[n]["site"], n))
+    now = time.time()
+    lines = [views.catalogue_head(app.width)]
+    last_site = None
+    for n in names:
+        if not text and last_site is not None and ref.clusters[n]["site"] != last_site:
+            lines.append(Line())
+        last_site = ref.clusters[n]["site"]
+        lines.append(views.catalogue_line(n, ref.clusters[n], ref.access, on_board=n in board, last_used=hist.last_used(n),
+                                          now=now, width=app.width))  # fmt: skip
+    if not names:
+        lines.append(line("   nothing matches" + (f" {text!r}" if text else ""), DIM))
+    lines += [Line(), line(f" {len(names)} cluster{'s' if len(names) != 1 else ''}"
+                           f"{'' if args.all else ' you can use'}. ✓ on your board.   magrid add <name>   magrid hide <name>", DIM)]  # fmt: skip
+    app.out(lines)
+    return 0
+
+
+def _show_board(app: App) -> None:
+    names = app.board()
+    app.out([Line().add(" Your board: ", HEAD).add(" ".join(names) if names else "empty", PLAIN if names else WARN)])
+
+
+def cmd_add(app: App, args) -> int:
+    picked = app.pick(args.words)
+    if app.replay is not None:
+        raise SystemExit("magrid: not with --replay")
+    new = app.on_board(picked.clusters)
+    if new:
+        app.out([Line().add(" ✔ ", OKB).add("added: " + " ".join(new))])
+    else:
+        app.out([line(" Already on your board.", DIM)])
+    _show_board(app)
+    return 0
+
+
+def cmd_hide(app: App, args) -> int:
+    picked = app.pick(args.words)
+    if app.replay is not None:
+        raise SystemExit("magrid: not with --replay")
+    gone = app.off_board(picked.clusters)
+    if gone:
+        app.out([Line().add(" ✔ ", OKB).add("hidden: " + " ".join(gone)), line(" (magrid add brings them back)", DIM)])
+    else:
+        app.out([line(" None of these was on your board; they will stay off it.", DIM)])
+    _show_board(app)
     return 0
 
 
@@ -181,7 +295,7 @@ def cmd_jobs(app: App, args) -> int:
 
 def cmd_who(app: App, args) -> int:
     _known_clusters(app)
-    clusters, nodes = app.expand(args.names) if args.names else (app.cfg.clusters, [])
+    clusters, nodes = app.expand(args.names) if args.names else (app.board(), [])
     snap = app.load(clusters, quota=False)
     chosen = []
     for c in clusters:
@@ -205,7 +319,7 @@ def cmd_who(app: App, args) -> int:
 
 def cmd_gantt(app: App, args) -> int:
     _known_clusters(app)
-    clusters, _ = app.expand(args.names) if args.names else (app.cfg.clusters, [])
+    clusters, _ = app.expand(args.names) if args.names else (app.board(), [])
     snap = app.load(clusters, quota=True)
     end = None
     if args.days:
@@ -333,6 +447,7 @@ def wait_and_book(app: App, planned, opens: int, clusters: list[str], yes: bool)
     failures, outcomes = run_plan(app, pl)
     if any(o.ok for o in outcomes):
         verify.after(app, [o for o in outcomes if o.ok])
+        remember(app, outcomes)
     return 1 if failures or pl.problems else 0
 
 
@@ -385,7 +500,19 @@ def cmd_book(app: App, args) -> int:
     failures, outcomes = run_plan(app, pl)
     if any(o.ok for o in outcomes):
         verify.after(app, [o for o in outcomes if o.ok])
+        remember(app, outcomes)
     return 1 if failures or pl.problems else 0
+
+
+def remember(app: App, outcomes: list[oar.Outcome]) -> None:
+    """A cluster just booked goes on the board."""
+    booked = list(dict.fromkeys(o.request.cluster for o in outcomes if o.ok))
+    try:
+        new = app.on_board(booked)
+    except OSError:
+        return
+    if new:
+        app.out([line(f" {' and '.join(new)} {'is' if len(new) == 1 else 'are'} now on your board.", DIM)])
 
 
 # ----------------------------------------------------------------- del, extend
@@ -578,6 +705,9 @@ examples:
   magrid book grdix:2            two queued jobs on an abaca cluster
   magrid book yeti-2 -n          dry run on a given node: show the command only
   magrid who roazhon15           who holds it, until when
+  magrid board arm               the ARM clusters (also: lyon, gpu, x86, power, exotic, abaca, all)
+  magrid clusters arm lyon       every cluster, filtered; ✓ marks those on your board
+  magrid add hydra pyxis         put them on your board (magrid hide takes them off)
   magrid gantt dahu              the timeline of a cluster
   magrid jobs                    your jobs on every site
   magrid extend 1234567 --max    extend a job as far as the rules allow
@@ -588,7 +718,8 @@ examples:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("-c", "--clusters", action="append", metavar="LIST", help="clusters to work on instead of the configured ones")
+    common.add_argument("-c", "--clusters", action="append", metavar="WORDS",
+                        help="clusters to work on instead of your board: names, sites or groups (arm, gpu, ...)")
     common.add_argument("--refresh", action="store_true", help="read the cluster descriptions again (cached for a week)")
     common.add_argument("--no-color", action="store_true", help="plain text")
     common.add_argument("--width", type=int, help="width of the output in columns")
@@ -611,7 +742,8 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     sp = add("board", cmd_board, "what you can book, printed", aliases=["b", "status"])
-    sp.add_argument("names", nargs="*", metavar="cluster", help="clusters to show (default: the configured ones)")
+    sp.add_argument("names", nargs="*", metavar="what",
+                    help="clusters, nodes, sites (lyon) or groups (arm, x86, power, gpu, exotic, abaca, recent, all); default: your board")
     sp.add_argument("-g", "--gantt", action="store_true", help="add the timeline of each cluster")
 
     sp = add("tui", cmd_tui, "the interactive board (the default on a terminal)", aliases=["i"])
@@ -661,6 +793,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("jobs", nargs="+", metavar="job")
     sp.add_argument("-n", "--dry-run", action="store_true")
     sp.add_argument("-y", "--yes", action="store_true")
+
+    sp = add("clusters", cmd_clusters, "all the clusters, and which are on your board", aliases=["ls"])
+    sp.add_argument("words", nargs="*", metavar="word", help="keep the clusters matching every word: arm, lyon, gpu, epyc, p3, ...")
+    sp.add_argument("-a", "--all", action="store_true", help="also those your group has no access to")
+
+    sp = add("add", cmd_add, "put clusters on your board")
+    sp.add_argument("words", nargs="+", metavar="what", help="clusters, sites or groups (arm, gpu, ...)")
+
+    sp = add("hide", cmd_hide, "take clusters off your board")
+    sp.add_argument("words", nargs="+", metavar="what", help="clusters, sites or groups")
 
     add("check", cmd_check, "what the weekly usage policy check will say about you")
     add("rules", cmd_rules, "the rules magrid enforces")

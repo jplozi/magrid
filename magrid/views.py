@@ -800,6 +800,46 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
     return out + rows
 
 
+# --------------------------------------------------------------- catalogue
+
+ACCESS_TEXT = {"default": "default", "p1": "abaca p1", "p2": "abaca p2", "p3": "abaca p3", "p4": "abaca p4",
+               "besteffort": "best-effort", "none": "no access"}  # fmt: skip
+
+
+def catalogue_head(width: int) -> Line:
+    ln = Line().add("   ")
+    for text, w in (("cluster", 12), ("site", 11), ("nodes", 6), ("arch", 9), ("cpu", 31), ("cores", 6), ("RAM", 9),
+                    ("queue", 12), ("you used it", 13), ("GPU", 0)):  # fmt: skip
+        ln.extend_line(cell(text, w, DIM) if w else line(text, DIM))
+    return ln.clip(width)
+
+
+def catalogue_line(name: str, d: dict, access: dict[str, str], *, on_board: bool, last_used: int, now: float,
+                   width: int, selected: bool = False) -> Line:  # fmt: skip
+    """One cluster: what it is, whether you can use it, when you last did."""
+    from . import selection
+
+    bg = BG_SELECT if selected else None
+    acc = selection.access_of(d, access)
+    sockets = d.get("sockets") or 0
+    cpu = f"{sockets} x {d.get('cpu', '')}" if sockets else d.get("cpu", "")
+    ram = d.get("ram_gib") or 0
+    ram_text = f"{ram / 1024:.1f} TiB".replace(".0 ", " ") if ram >= 1024 else f"{ram} GiB" if ram else ""
+    gpu = f"{d['gpus']} x {d.get('gpu_model', '')}" if d.get("gpus") else ""
+    ln = Line().add(" ✓ " if on_board else "   ", OKB.on(bg))
+    ln.extend_line(cell(name, 12, HEAD.on(bg)))
+    ln.extend_line(cell(d["site"], 11, DIM.on(bg)))
+    ln.extend_line(cell(str(len(d.get("nodes", {}))), 6, St(bg=bg)))
+    ln.extend_line(cell(d.get("arch", ""), 9, (ACCENT if d.get("arch") not in ("", "x86_64") else DIM).on(bg)))
+    ln.extend_line(cell(cpu, 31, St(bg=bg)))
+    ln.extend_line(cell(str(d.get("cores") or ""), 6, St(bg=bg)))
+    ln.extend_line(cell(ram_text, 9, St(bg=bg)))
+    ln.extend_line(cell(ACCESS_TEXT.get(acc, acc), 12, (VDIM if acc == "none" else DIM).on(bg)))
+    ln.extend_line(cell(selection.ago(last_used, now), 13, MINE.on(bg) if last_used else St(bg=bg)))
+    ln.add(gpu, DIM.on(bg))
+    return ln.clip(width).pad(width if selected else 0, St(bg=bg))
+
+
 # ------------------------------------------------------------------- rules
 
 RULES_TEXT = """\
