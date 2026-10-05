@@ -179,11 +179,14 @@ def _best_window(
     prefer: Optional[str] = None,
     until: Optional[int] = None,
     not_before: int = 0,
+    duration: Optional[int] = None,
 ) -> Optional[Window]:
     """The longest legal window during which k nodes are free, earliest on ties.
 
     prefer picks among the legal ends: None for the longest, "short" for the
-    one that stays inside the period it starts in. until caps the end.
+    one that stays inside the period it starts in. until caps the end. With a
+    duration, the earliest window of that length wins; failing that, the
+    longest shorter one.
     """
     quota = snap.quota(cluster.name)
     cores = k * cluster.cores_per_node
@@ -202,6 +205,8 @@ def _best_window(
             end, why = free[k - 1].until - margin, "next"
         if until is not None and until < end:
             end, why = until, "asked"
+        if duration is not None and s + duration < end:
+            end, why = s + duration, "asked"
         end -= end % 60  # whole minutes: round walltimes, and never past what was computed
         if end - s < MIN_DURATION:
             continue
@@ -212,6 +217,8 @@ def _best_window(
             continue
         fit = sorted((w for w in free if w.until >= end), key=_node_rank)[:k]
         cand = Window(s, end, [w.node for w in fit], opt, v, why)
+        if duration is not None and cand.duration >= duration - 60:
+            return cand  # the earliest window of the length asked for
         if best is None or cand.duration > best.duration + 60:
             best = cand
     return best
@@ -243,10 +250,11 @@ def reserve_offer(snap: Snapshot, cluster: Cluster, slot: Slot, margin: int, now
 
 
 def window_for(snap: Snapshot, offer: Offer, k: int, margin: int, *, prefer: Optional[str] = None,
-               until: Optional[int] = None, not_before: int = 0, now: Optional[int] = None) -> Optional[Window]:  # fmt: skip
+               until: Optional[int] = None, not_before: int = 0, duration: Optional[int] = None,
+               now: Optional[int] = None) -> Optional[Window]:  # fmt: skip
     """The window for k nodes of a reserve offer (the daily quota shrinks it as k grows)."""
     now = offer.now if now is None else now
-    return _best_window(snap, offer.cluster, now, offer.windows, k, margin, prefer, until, not_before)
+    return _best_window(snap, offer.cluster, now, offer.windows, k, margin, prefer, until, not_before, duration)
 
 
 def max_nodes(snap: Snapshot, offer: Offer, margin: int) -> int:

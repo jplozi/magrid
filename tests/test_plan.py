@@ -213,3 +213,25 @@ class ClockGuard(unittest.TestCase):
         self.assertEqual(it.request.end, T(TUE, 8, 55))
         self.assertIn("try again in a few seconds", plan.finalize(it, snap, T(MON, 17, 0, 2)))
         self.assertIsNone(plan.finalize(it, snap, T(MON, 17, 0, 6)))
+
+
+class Duration(unittest.TestCase):
+    def test_the_earliest_window_of_the_length_asked(self):
+        now = T(MON, 13, 10)
+        a = resv("bob", T(MON, 16), T(TUE, 9), now=now)  # yeti-1 is free now, until 16:00
+        b = resv("ann", T(MON, 9), T(MON, 15), now=now)  # yeti-2 frees up at 15:00, then free all afternoon
+        gone = resv("eve", T(MON, 9), T(TUE, 9), now=now)
+        snap = platform(now, yeti={"busy": {1: [a], 2: [b], 3: [gone], 4: [gone]}})
+        # without a duration: the longest window, on yeti-2
+        r = book(snap, "yeti", When(slot="now")).items[0].request
+        self.assertEqual((r.start, r.end), (T(MON, 15), T(MON, 18, 55)))
+        # two hours: yeti-1 can do that right away
+        r = book(snap, "yeti", When(slot="now", duration=2 * H)).items[0].request
+        self.assertEqual((r.start, r.walltime), (T(MON, 13, 11), 2 * H))
+        # three and a half hours: only yeti-2 can, from 15:00
+        r = book(snap, "yeti", When(slot="now", duration=3 * H + 1800)).items[0].request
+        self.assertEqual((r.start, r.walltime), (T(MON, 15), 3 * H + 1800))
+        # five hours: nobody can; refused, with what is possible
+        pl = book(snap, "yeti", When(slot="now", duration=5 * H))
+        self.assertFalse(pl.items)
+        self.assertIn("--clip", pl.problems[0])
