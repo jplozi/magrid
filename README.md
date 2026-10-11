@@ -1,5 +1,3 @@
-<img src="docs/magrid.svg" align="right" width="150" alt="">
-
 # magrid
 
 magrid is a command-line tool for reserving compute nodes on
