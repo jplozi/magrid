@@ -1,89 +1,186 @@
+<img src="docs/magrid.svg" align="right" width="150" alt="">
+
 # magrid
 
-Book Grid'5000 machines from the terminal, without ever breaking the Usage Policy.
+magrid is a command-line tool for reserving compute nodes on
+[Grid'5000](https://www.grid5000.fr) within the constraints of the platform's
+Usage Policy. It reads the state of the platform, computes the reservation
+windows that the policy allows on a set of clusters, and generates the
+corresponding `oarsub` commands. Reservations are checked against the rules
+before submission, at the time of submission, and once more after OAR has
+recorded them.
 
-magrid shows what you can book on your clusters and for how long, who holds
-the machines you want, and builds the `oarsub` commands itself: the
-start, the walltime, the queue and the job types are computed from the rules,
-so the weekly "usage has been violating the Usage Policy" e-mail has nothing
-to say.
+![The interactive board](docs/board.png)
+
+## Motivation
+
+The Usage Policy of Grid'5000 constrains reservations in the default queue in
+several ways: a daily quota of core-hours per cluster during working hours, two
+boundaries (09:00 and 19:00 on working days) that a job may cross only under
+conditions on its submission time, and limits on the number and horizon of
+advance reservations. Production (abaca) clusters follow a different regime,
+with per-cluster priorities and maximum walltimes. Compliance is verified
+weekly by a script that reports violations to the user and to the managers of
+their group.
+
+Computing start times and walltimes by hand against these rules is error-prone
+(a walltime of 58:55 instead of 57:55 is enough to cross Monday 09:00), and
+the information needed to choose a window, such as the availability of nodes,
+the quota already consumed and the reservations already waiting, is spread
+over several web pages and commands. magrid gathers it and applies the rules.
+
+## Functions
+
+- **Board.** For each cluster and each coming time slot (now, tonight,
+  tomorrow, the coming weekend), the number of nodes free for the whole slot
+  and the longest duration the rules allow. Production clusters show the
+  priority queue, the maximum walltime and an estimated start.
+- **Booking.** Given clusters and node counts, magrid selects the window,
+  computes the start and the walltime, lists the rules it checked, prints the
+  `oarsub` command and asks for confirmation. After submission it reads back
+  what OAR recorded, checks it again, and runs the official policy check on
+  the new job. `--wait` defers a reservation that is still beyond the 48-hour
+  horizon and submits it when it becomes allowed.
+- **Occupancy.** Who holds each node, with full name and group, until when,
+  and who comes next; a per-node timeline of each cluster.
+- **Own jobs.** The user's jobs on all sites, with a prediction of what the
+  weekly check will report about each of them and, for a job that would be
+  reported, the time before which ending it keeps it compliant. Extensions
+  (`oarwalltime`) are checked against the same rules.
+- **Cluster catalogue.** Every cluster of every site with its architecture,
+  processor, memory, GPUs, the user's access level and the date of last use.
+  The default board is the set of clusters the user ran jobs on in the last
+  two months.
+
+## Rules
+
+The rules were taken from three sources: the Usage Policy page of the
+Grid'5000 wiki, the `usagepolicycheck` script installed on the frontends
+(version 4.4.6), which produces the weekly report, and the OAR admission rules
+of each site, which `oarsub` applies. [docs/rules.md](docs/rules.md) gives
+each rule with its source; `magrid rules` prints a summary. For the default
+queue, in Europe/Paris time:
+
+- Working days are Monday to Friday except French public holidays. Daytime is
+  09:00 to 19:00 on working days.
+- During daytime, a user may use at most 2 hours multiplied by the number of
+  cores of a cluster, per cluster and per day. One node of an N-node cluster
+  may therefore be held for 2N hours of daytime.
+- A job may not cross 09:00 unless it was submitted on that same day; the part
+  after 09:00 counts towards the quota.
+- A job may not cross 19:00 unless it was submitted at or after 17:00 on that
+  same day; the part before 19:00 is then exempt from the quota.
+- Jobs of at most one hour starting within ten minutes of submission are
+  exempt from the quota, as are extensions of at most one hour requested in the
+  last ten minutes of a job.
+- A user may have at most two advance reservations waiting per site, starting
+  at most 48 hours ahead (silver level; the limits differ for gold and
+  bronze). Reservations starting within the hour do not count.
+
+Production clusters have no day or night rule and no advance reservations;
+the group's priority on each cluster (p1 to p4) sets a maximum walltime, and
+jobs of higher priority are scheduled first. Best-effort jobs run on idle
+nodes and are killed when a regular job needs them.
+
+The `usagepolicycheck` script applies tolerances that the written policy does
+not mention (5 minutes around each boundary, 5% on the quota) and is stricter
+in one case (a job crossing 19:00 but ending within 5 minutes of it does not
+get the exemption). magrid plans without any tolerance and, by default, ends
+reservations 5 minutes before a boundary.
+
+## Method
+
+**Data.** One ssh connection to a frontend provides, through the Grid'5000
+REST API, the status of every node of the sites concerned, with the running
+and scheduled jobs on each, and the user's jobs on all sites. The daytime
+already consumed on each cluster is taken from `usagepolicycheck` itself.
+Cluster descriptions, the user's group and privilege level, and the group's
+priorities on production clusters are read once a week; the list of clusters
+recently used, once a day from the OAR databases (public read-only account).
+Each piece is used as soon as it arrives, so a slow site delays only its own
+clusters.
+
+**Windows.** For a cluster and a slot, the free intervals of each node are
+computed from the recorded jobs (predicted slots of queued jobs count as
+busy). The latest legal end of a window starting at a given time depends on
+the submission time, the period (day, night, weekend) and the remaining
+quota for the number of nodes requested; the window retained is the longest
+one during which the requested number of nodes is simultaneously free. Every
+candidate window is checked twice: against the written rules read without
+tolerance (`magrid/policy.py`), and against a port of `usagepolicycheck`
+(`magrid/checker.py`). A window is offered only if both accept it.
+
+**Submission.** At the moment of submission the window is checked again with
+the frontend's clock, with a few seconds of margin on the conditions that
+depend on the submission time. Reservations use `oarsub -r` even when they
+start immediately, because the end of a reservation is fixed by OAR (a late
+start shortens the walltime), whereas a queued job's end moves with its start.
+After submission, the start and walltime recorded by OAR are read back and
+checked, and `usagepolicycheck` is run on the sites concerned.
+
+**Drift.** `magrid doctor` compares fingerprints of the three rule sources
+(wiki revision, script checksum, admission rules of each site) with those
+magrid was verified against, and reports any change.
+
+## Validation
+
+- The port of `usagepolicycheck` was compared with the original on 4,048
+  synthetic jobs placed around every boundary, tolerance, holiday and clock
+  change, with and without extensions. The core-seconds counted per user, day
+  and cluster, the boundary-crossing jobs and the resulting violations are
+  identical (`tests/test_checker_oracle.py`).
+- A randomized test builds platforms at random times and checks that every
+  window offered passes both checks and overlaps no existing reservation on
+  the nodes it names.
+- The command line is tested end to end against a fake frontend built from a
+  recorded state of the platform: the exact `oarsub`, `oardel` and
+  `oarwalltime` commands are asserted, as is the absence of any command when
+  a rule or the user refuses.
+- The argument sets magrid generates were submitted to the live platform,
+  read back and deleted (`tests/live/probe.py`).
+
+The test suite (`python3 -m unittest discover -s tests -t .`, about 190
+tests) runs offline.
+
+## Usage
+
+magrid needs Python 3.9 or later and nothing else. It runs on the user's
+machine and reaches each site's frontend through ssh, with the host alias
+pattern given in the configuration (`{site}.g5k` by default).
 
 ```
-                              NOW              TONIGHT          TOMORROW         WEEKEND
-                              →18:55           19:00→08:55      Tue 09:00→18:55  Fri→Mon 08:55
-
- yeti  4 nodes, 1 down        3 × 5h43         3 × 13h55        3 × 8h           3 × 61h55
- grenoble · 8 node-h/day      →18:55           →Tue 08:55       →Tue 17:00       opens Wed 19:00
-
- dahu  31 nodes, 5 down       20 × 2h43        1 × 13h55        1 × 9h55         26 × 61h55
- grenoble · 55.9/60 node-h    →15:55           →Tue 08:55       →Tue 18:55       opens Wed 19:00
-
- grdix  16 nodes              queue p3 · up to 48h · est. start 16:17  ●2
- nancy · abaca p3             2 queued ahead · no day or night rule; higher priorities go first
-
- roazhon15  1 node            best-effort · up to 48h · est. start Wed 12:37  ●1
- rennes · best-effort only    held by you until Wed 12:37 · killed as soon as a regular job needs it
+git clone https://github.com/jplozi/magrid.git
+ln -s "$PWD/magrid/bin/magrid" ~/.local/bin/magrid
+magrid doctor
 ```
 
-Read it as: on yeti, 3 nodes are free now until 18:55, 3 for the whole night,
-3 tomorrow but only for 8 hours (the daily quota of a 4-node cluster), and the
-weekend cannot be reserved before Wednesday 19:00 (48 hours ahead, silver
-level).
-
-## Install
-
-Python 3.9 or later, nothing else. It runs on your own machine and reaches the
-frontends with the ssh alias you already use (`ssh grenoble.g5k`).
-
 ```
-git clone git@gitlab.inria.fr:whisper/magrid.git ~/work/magrid
-ln -s ~/work/magrid/bin/magrid ~/.local/bin/magrid
-magrid doctor        # checks the connection, your level, and that the rules have not changed
-```
-
-## Use
-
-```
-magrid                          the interactive board
-magrid board                    the same picture, printed
+magrid                          interactive board
+magrid board [what]             the board, printed; what: clusters, sites, groups (arm, gpu, ...)
 magrid book yeti:2 --tonight    two yeti nodes for the night
-magrid book dahu:max --weekend  every dahu node that is free for the whole weekend
+magrid book dahu:max --weekend  every dahu node free for the whole weekend
 magrid book yeti dahu:4         as early as possible, as long as the rules allow
 magrid book yeti --from 14:00 --for 3h
-magrid book yeti:2 --weekend --wait    too early to reserve? stay running and book the second it opens
-magrid book grdix:2             two queued jobs on an abaca cluster
-magrid book yeti-2 -n           dry run on a given node: show the command, submit nothing
-magrid who roazhon15            who holds it, with full name and group, until when, and who is next
-magrid board arm                the ARM clusters (also: lyon, gpu, x86, power, exotic, abaca, all)
-magrid clusters arm lyon        every cluster of every site, filtered; ✓ marks those on your board
-magrid add hydra pyxis          put clusters on your board (magrid hide takes them off)
-magrid gantt dahu               the timeline of a cluster
-magrid jobs                     your jobs on every site
-magrid extend 1234567 --max     extend a job as far as the rules allow
-magrid del 1234567
-magrid check                    what the weekly check will say about you, on all sites
-magrid rules                    the rules, in one page
+magrid book yeti:2 --weekend --wait    submit when the 48-hour horizon allows it
+magrid book grdix:2             two queued jobs on a production cluster
+magrid book yeti-2 -n           dry run: the command only
+magrid who roazhon15            holders, groups, until when, who is next
+magrid gantt dahu               timeline of a cluster
+magrid jobs                     own jobs on every site
+magrid extend <job> --max       extend a running job as far as the rules allow
+magrid del <job>
+magrid check                    what the weekly check will report
+magrid clusters [words]         the catalogue, filtered (arm, lyon, gpu, epyc, p3, ...)
+magrid add, magrid hide         edit the board
+magrid rules, magrid doctor, magrid config
 ```
 
-In the interactive board: arrows to move, `+` and `-` to choose how many nodes
-in a cell, `m` for as many as possible, Enter to review the exact commands and
-book, `a` to add a cluster (type to search: `arm`, `lyon`, `gpu`, `epyc`),
-`x` to hide one, `g` for the timeline of the cluster, `j` for your jobs, `?`
-for help.
+In the interactive board: arrows move, `+` and `-` set the number of nodes
+in the focused cell, `m` takes all of them, Enter reviews the commands and
+books, `a` adds a cluster (searchable), `x` hides one, `g` shows the
+timeline, `j` the user's jobs, `?` the help.
 
-## Which clusters
-
-Your board shows the clusters you have run jobs on in the last two months,
-read from the OAR databases of every site once a day. Add or hide clusters
-with `a` and `x` in the board, or `magrid add` and `magrid hide`; a cluster you
-book with magrid joins the board by itself. Any command also takes other
-clusters directly: `magrid board lyon`, `magrid gantt sasquatch`,
-`magrid book pyxis:2 --tonight`. `magrid clusters` lists them all, with
-architecture, CPU, cores, memory, GPUs, your access, and when you last used
-each.
-
-Booking always shows the plan first, with every rule that was checked and the
-`oarsub` command, and asks before submitting:
+A booking plan, as shown before confirmation:
 
 ```
  yeti × 2   grenoble   likely yeti-2, yeti-1
@@ -94,8 +191,8 @@ Booking always shows the plan first, with every rule that was checked and the
    $ oarsub -q default -t deploy -t exotic -t destructive -r "2026-10-05 19:00:00" -l "{cluster='yeti'}/nodes=2,walltime=13:55:00"
 ```
 
-If you ask for something the rules do not allow, magrid refuses, says which
-rule, and gives the nearest thing that is allowed:
+A request outside the rules is refused with the rule and the nearest
+allowed alternative:
 
 ```
  ✘ yeti: cannot run until Tue 6 Oct 18:55: 9h55 of daytime on Tue 6 Oct takes 9.9 node-hours, but only 8
@@ -103,109 +200,53 @@ rule, and gives the nearest thing that is allowed:
    Tue 6 Oct 17:00 (add --clip to take that)
 ```
 
-## The rules
+### Configuration
 
-`magrid rules` prints them; [docs/rules.md](docs/rules.md) says where each one
-comes from and how it was verified. In short, for the default queue (all times
-Europe/Paris):
+`magrid config` creates and prints `~/.config/magrid/config.ini`: the board
+(`auto`, or a list of clusters, plus clusters added and hidden), the ssh alias
+pattern, the margin before boundaries, the job types per queue (`deploy
+destructive` for the default queue; `exotic` is added where required), one
+job per node or per cluster, teammates' logins, and the terminal theme.
 
-- Daytime is 09:00 to 19:00 on working days. In daytime you may use 2 hours
-  times all the cores of a cluster, per day: one node of an N-node cluster for
-  2 x N hours.
-- A job may not cross 09:00, unless it was submitted that same day (after
-  midnight).
-- A job may not cross 19:00, unless it was submitted at or after 17:00 that
-  same day. There is no 17:00 boundary: 17:00 is only the time from which a
-  new job may run on through the night.
-- So a night is 19:00 to 09:00, a weekend is Friday 19:00 to Monday 09:00, and
-  nothing can extend a night or weekend job past 09:00.
-- At most 2 advance reservations waiting per site, at most 48 hours ahead
-  (silver). Reservations starting within the hour are exempt.
+### Operations performed on Grid'5000
 
-The abaca queues have no day or night rule, no advance reservation, and a
-maximum walltime that depends on your group's priority on each cluster. Jobs
-there are queued, and higher priorities are scheduled first, so the start time
-magrid shows is an estimate. Best-effort jobs have no rule either and are
-killed when a regular job needs the node.
+Read-only, through one ssh connection to one frontend: `curl` on the
+Grid'5000 API (node status, the user's jobs), `usagepolicycheck --json` for
+the sites of the default-queue clusters shown (every ten minutes in the
+interactive board, and after each action), one query per site on the OAR
+databases once a day, and the reference API once a week. Nothing is run on a
+node.
 
-## Why it can be trusted
+Modifying, only after confirmation: `oarsub`, `oardel` and `oarwalltime` on
+the frontend of the site concerned, with the exact command printed first.
+`-n` prints the command without running it.
 
-- The rules are not from memory. They were read from the three places that
-  define them: the Usage Policy page, the `usagepolicycheck` script that sends
-  the weekly e-mail, and the OAR admission rules that `oarsub` runs.
-- `magrid/checker.py` is a port of that script. It is compared with the real
-  one on 4,048 synthetic jobs placed around every boundary, tolerance, holiday
-  and clock change: the figures and the verdicts are identical
-  (`tests/test_checker_oracle.py`).
-- Every window is checked twice before it is proposed: against the written
-  rules read without any tolerance, and against the port. A randomized test
-  builds platforms at random times and verifies that everything magrid offers
-  passes both.
-- The quota already used today comes from `usagepolicycheck` itself.
-- At the second a job is submitted, it is checked again with the frontend's
-  clock. After submission, magrid reads back what OAR recorded, checks that,
-  and runs the official check on the new job.
-- `magrid doctor` compares fingerprints of the three sources with the versions
-  magrid was verified against, and says so if Grid'5000 changed its rules.
+## Limitations
 
-By default reservations end 5 minutes before a boundary (08:55, 18:55), and
-none of the tolerances of the official check are used.
-
-## What it runs on Grid'5000
-
-Reading, through one ssh connection to one frontend: `curl` on the Grid'5000
-API (node status, your jobs) at every refresh, once a minute in the
-interactive board; `usagepolicycheck --json` for the sites of your
-default-queue clusters, every ten minutes and after each of your actions; once
-a day, which clusters you used, with one query per site on the OAR databases'
-public read-only account (about a second each, five at nancy); once a week,
-the cluster descriptions, your group and your abaca priorities. Each piece is
-used as soon as it arrives: a site that is slow to answer shows "reading…"
-and holds back nothing else, and a site that does not answer keeps what was
-read from it before.
-
-Changing something, only after you confirm: `oarsub`, `oardel` and
-`oarwalltime`, on the frontend of the site concerned, with the exact command
-shown first. `-n` shows it without running it.
-
-Nothing is ever run on a node, and nothing heavier than those commands on a
-frontend.
-
-## Configuration
-
-`magrid config` creates and shows `~/.config/magrid/config.ini`: the clusters
-on the board (`auto`, or a list of your own) with the clusters added and
-hidden, the ssh alias pattern, the safety margin, the job types per queue
-(`deploy destructive` by default for the default queue; `exotic` is added
-where needed), one job per node or per cluster, your teammates' logins, and
-`theme = light` for a terminal with a light background.
-
-## Limits
-
-- Start times in the abaca queues are estimates: later jobs of higher priority
-  go first.
-- Between the moment a window is shown and the moment it is submitted, someone
-  else can take the nodes. OAR then refuses the reservation and magrid says
-  so. A refused reservation never breaks a rule.
+- Start times on production clusters are estimates from the current queue;
+  jobs of higher priority submitted later are scheduled first.
+- Nodes shown free may be taken between display and submission; OAR then
+  refuses the reservation, which magrid reports.
 - Predicted slots of queued jobs in the default queue are treated as busy,
-  which can hide a window that OAR would accept.
-- Jobs are assumed to take whole nodes. Moldable jobs, containers, VLANs,
+  which may hide windows that OAR would accept.
+- Jobs are assumed to occupy whole nodes. Moldable jobs, containers, VLANs,
   subnets and disk reservations are not handled.
+- The rules encoded are those in force on 2026-10-05; `magrid doctor`
+  reports a change of the sources but does not interpret it.
 
 ## Development
 
-```
-python3 -m unittest discover -s tests -t .     # about 180 tests, offline
-```
-
-- `tests/oracle/make_oracle.py` regenerates the corpus for the comparison with
-  the real `usagepolicycheck` (one short run of the official tool on a
-  frontend).
-- `tests/live/probe.py` submits what magrid would submit, reads it back and
-  deletes it at once. It creates real jobs for a few seconds: read its header
-  before using it.
+- `tests/oracle/make_oracle.py` regenerates the corpus for the comparison
+  with `usagepolicycheck` (one run of the script on a frontend, with input
+  files).
 - `MAGRID_RECORD=file magrid board` records a state of the platform;
-  `--replay file` plays it back without any connection (and without being
-  able to submit). `tests/oracle/sanitize_recording.py` makes a fixture of it.
+  `--replay file` replays it without a connection (submissions are disabled).
+  `tests/oracle/sanitize_recording.py` turns a recording into a fixture with
+  logins, groups and job numbers replaced.
+- `tools/screenshot.py` regenerates `docs/board.png` from a synthetic state
+  (requires matplotlib).
+- The repository is developed on gitlab.inria.fr and mirrored to GitHub with
+  `tools/mirror-github.py`.
 
-The name is for Magritte: in a dry run, *ceci n'est pas une réservation*.
+The name refers to Magritte. A dry run prints *Ceci n'est pas une
+réservation*.
