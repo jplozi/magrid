@@ -6,6 +6,7 @@ import argparse
 import copy
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,8 @@ class App:
         self.words: list[str] = [c for part in (getattr(args, "clusters", None) or []) for c in part.replace(",", " ").split()]
         self.remote = Remote(self.cfg)
         self._history: Optional[fetch.History] = None
+        self.history_stale = False
+        self.history_later = False  # True: use a stale cached history now, refresh it in the background
         self.replay: Optional[Path] = Path(args.replay) if getattr(args, "replay", None) else None
         self.ref: Optional[fetch.Reference] = None
         self.snap: Optional[Snapshot] = None
@@ -48,8 +51,11 @@ class App:
     def history(self) -> fetch.History:
         """The clusters the user ran jobs on recently (read once a day)."""
         if self._history is None:
+            cached, self.history_stale = (None, False) if self.replay is not None else fetch.cached_history(self.reference())
             if self.replay is not None:
                 self._history = fetch.History()
+            elif cached is not None and self.history_later:
+                self._history = cached  # the interactive board reads it again in the background
             else:
                 path = fetch._history_path()
                 stale = not path.exists() or time.time() - path.stat().st_mtime > fetch.HISTORY_MAX_AGE
@@ -86,7 +92,7 @@ class App:
         except selection.SelectionError as e:
             raise SystemExit(f"magrid: {e}")
 
-    def load(self, clusters: Optional[list[str]] = None, *, quota: bool = True) -> Snapshot:
+    def load(self, clusters: Optional[list[str]] = None, *, quota: bool = True, job_nodes: bool = True) -> Snapshot:
         want = list(clusters if clusters is not None else self.board())
         if self.replay is not None:
             now = None
@@ -98,9 +104,35 @@ class App:
         unknown = [c for c in want if c not in self.ref.clusters]
         if unknown:
             raise SystemExit(f"magrid: unknown cluster: {', '.join(unknown)}")
-        self.snap = fetch.fetch_state(self.remote, self.cfg, self.ref, want, quota=quota)
+        progress = fetch.Progress()
+        stop = threading.Event()
+
+        def watch():  # say which site is slow, rather than looking stuck
+            shown = False
+            while not stop.wait(0.5):
+                pending = progress.pending()
+                if pending and time.time() - progress.started > 3 and sys.stderr.isatty():
+                    print(f"\rmagrid: waiting for {', '.join(pending)} (slow to answer)…   ", end="", file=sys.stderr, flush=True)
+                    shown = True
+            if shown:
+                print("\r" + " " * 72 + "\r", end="", file=sys.stderr, flush=True)
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
+        try:
+            self.snap = fetch.fetch_state(self.remote, self.cfg, self.ref, want, quota=quota, progress=progress, job_nodes=job_nodes)
+        finally:
+            stop.set()
+            watcher.join(2)
         self.offset = time.time() - self.snap.now
         return self.snap
+
+    def with_jobs(self, names: list[str]) -> list[str]:
+        """The board's clusters, plus those where you hold jobs (auto board, not hidden)."""
+        if self.words or self.snap is None:
+            return names
+        held = [c for j in self.snap.jobs for c in j.clusters]
+        return selection.with_jobs(names, held, self.cfg, self.ref.clusters, self.ref.access)
 
     def cluster_cores(self) -> dict[str, int]:
         return {name: sum(n["cores"] for n in d["nodes"].values()) for name, d in self.ref.clusters.items()}
@@ -174,6 +206,8 @@ def cmd_board(app: App, args) -> int:
                  line(" See them all with: magrid clusters", DIM)])  # fmt: skip
         return 1
     snap = app.load(clusters)
+    if not names:
+        clusters = app.with_jobs(clusters)
     width = app.width
     cs = [snap.clusters[c] for c in clusters if c in snap.clusters]
     slots = views.visible_slots(avail.slots(snap.now), width)
@@ -378,7 +412,7 @@ def run_plan(app: App, pl: plan.Plan, *, say=None) -> tuple[int, list[oar.Outcom
     say = say or (lambda lines: app.out(lines))
     snap = app.snap
     if app.now() - snap.now > 120:  # the picture is getting old: look again before committing
-        snap = app.load(list(dict.fromkeys(it.cluster.name for it in pl.items)))
+        snap = app.load(list(dict.fromkeys(it.cluster.name for it in pl.items)), job_nodes=False)
     live = copy.copy(snap)
     live.quotas = copy.deepcopy(snap.quotas)
     live.jobs = list(snap.jobs)

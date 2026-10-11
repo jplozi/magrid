@@ -2,7 +2,7 @@ import unittest
 
 from magrid import audit, avail, fetch, plan, term, views
 from magrid.plan import When
-from tests.helpers import FIXTURE, H, MON, TUE, T, cfg, platform, resv
+from tests.helpers import FIXTURE, H, MON, TUE, T, cfg, my_job, platform, resv
 
 CLUSTERS = ["yeti", "dahu", "larochette", "grdix", "granite", "grosminet", "roazhon15"]
 
@@ -81,6 +81,51 @@ class OnTheRecording(unittest.TestCase):
         lines, _, _ = self.board(120)
         self.assertNotIn("\x1b", text(lines))
         self.assertIn("\x1b[", "\n".join(term.ansi(ln, color=True) for ln in lines))
+
+
+class Marker(unittest.TestCase):
+    """The ●N of nodes you already hold stays visible in every kind of cell."""
+
+    now = T(MON, 13, 10)
+
+    def cell(self, snap, cname, slot_name, **kw):
+        slot = avail.find_slot(avail.slots(snap.now), slot_name)
+        o = avail.offer_for(snap, snap.clusters[cname], slot, margin=300, besteffort_walltime=48 * H)
+        return [term.ansi(ln, color=False) for ln in views.offer_cell(o, snap, views.CELL_W - 1, **kw)]
+
+    def test_site_limit_keeps_the_marker_on_one_line(self):
+        r1 = resv("me", T(MON, 19), T(TUE, 8, 55), now=self.now)
+        r2 = resv("me", T(MON, 19), T(TUE, 8, 55), now=self.now)
+        snap = platform(self.now, yeti={"busy": {1: [r1]}}, dahu={"busy": {1: [r2]}},
+                        jobs=[my_job("grenoble", r1, ["yeti-1"], {"yeti": 64}), my_job("grenoble", r2, ["dahu-1"], {"dahu": 32})])
+        self.assertEqual(self.cell(snap, "yeti", "tonight", compact=True)[0], "site limit ●1")
+        self.assertEqual(self.cell(snap, "yeti", "tonight"), ["3 × 13h55 ●1", "site limit"])
+        self.assertEqual(self.cell(snap, "dahu", "tonight", compact=True)[0], "site limit ●1")
+
+    def test_a_choice_keeps_the_marker(self):
+        r = resv("me", T(MON, 9), T(MON, 18, 55), now=self.now)  # running on yeti-1
+        snap = platform(self.now, yeti={"busy": {1: [r]}}, jobs=[my_job("grenoble", r, ["yeti-1"], {"yeti": 64})])
+        for k in (1, 2, 3):
+            first = self.cell(snap, "yeti", "now", pick=k)[0]
+            self.assertTrue(first.startswith(f"{k}/3 × ") and first.endswith(" ●1"), first)
+            self.assertLessEqual(len(first), views.CELL_W - 1)
+        self.assertTrue(self.cell(snap, "yeti", "now")[0].endswith(" ●1"))
+
+    def test_a_cluster_you_hold_entirely_shows_the_marker(self):
+        r = resv("me", T(MON, 19), T(TUE, 8, 55), now=self.now)
+        snap = platform(self.now, yeti={"busy": {i: [r] for i in range(1, 5)}},
+                        jobs=[my_job("grenoble", r, [f"yeti-{i}" for i in range(1, 5)], {"yeti": 256})])
+        self.assertEqual(self.cell(snap, "yeti", "tonight"), ["– ●4", "all busy"])
+        self.assertEqual(self.cell(snap, "yeti", "tonight", compact=True)[0], "– ●4")
+
+    def test_text_gives_way_to_the_marker(self):
+        def m(variants, mark, width=15):
+            return views._marked(variants, views.WARN, mark, width, None).text.rstrip()
+
+        self.assertEqual(m(["opens Wed 19:00", "opens Wed"], ""), "opens Wed 19:00")
+        self.assertEqual(m(["opens Wed 19:00", "opens Wed"], "●2"), "opens Wed ●2")
+        self.assertEqual(m(["abcdefghijklmnop"], "●12"), "abcdefghij… ●12")
+        self.assertEqual(len(m(["abcdefghijklmnop"], "●12")), 15)
 
 
 class PlanView(unittest.TestCase):

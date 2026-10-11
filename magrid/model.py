@@ -172,6 +172,8 @@ class Cluster:
     threads_per_node: int = 0
     ram_gib: int = 0
     quota_cores: int = 0  # core count the daily quota is computed from
+    state: str = ""  # "": read now; "reading": not answered yet; "stale": shown as read at as_of; "unread": no data
+    as_of: int = 0
 
     @property
     def kind(self) -> str:

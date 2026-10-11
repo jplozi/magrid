@@ -120,3 +120,118 @@ class WithoutUsagepolicycheck(unittest.TestCase):
         v = policy.judge_window(snap.now, cal.at(day, 9), cal.at(day, 10), cores=64, quota=snap.quota("yeti"), cluster="yeti")
         self.assertTrue(v.ok)
         self.assertEqual(v.findings[0].rule, "quota?")
+
+
+class SlowSites(unittest.TestCase):
+    """A site that answers late, or not at all, holds back nothing else."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ref, cls.values, cls.files = fetch.load_recording(FIXTURE)
+
+    def without(self, *names):
+        return {k: v for k, v in self.files.items() if k not in names}
+
+    def test_a_pending_site_is_marked_as_being_read(self):
+        files = self.without("status_rennes")
+        snap = fetch.build_snapshot(self.values, files, self.ref, CLUSTERS, pending={"rennes"})
+        self.assertEqual(snap.clusters["roazhon15"].state, "reading")
+        self.assertEqual(snap.clusters["yeti"].state, "")
+        self.assertFalse(any(p.startswith("rennes") for p in snap.problems))
+
+    def test_a_silent_site_keeps_what_was_read_before(self):
+        before = fetch.build_snapshot(self.values, self.files, self.ref, CLUSTERS)
+        files = self.without("status_rennes")
+        files["status_rennes.fail"] = b"sites/rennes/status: curl: (28) Operation timed out after 45000 milliseconds"
+        values = dict(self.values, now=str(int(self.values["now"]) + 600))
+        snap = fetch.build_snapshot(values, files, self.ref, CLUSTERS, previous=before)
+        c = snap.clusters["roazhon15"]
+        self.assertEqual((c.state, c.as_of), ("stale", before.now))
+        self.assertEqual([n.name for n in c.nodes], [n.name for n in before.clusters["roazhon15"].nodes])
+        self.assertTrue(any(p.startswith("rennes: the Grid'5000 API did not answer; showing what was read at") for p in snap.problems))
+        # and without anything read before: unread, said so
+        snap = fetch.build_snapshot(values, files, self.ref, CLUSTERS)
+        self.assertEqual(snap.clusters["roazhon15"].state, "unread")
+        self.assertTrue(any("cannot be shown" in p for p in snap.problems))
+
+    def quota_of(self, site):
+        """The recorded usagepolicycheck answer, cut down to one site."""
+        import json
+
+        doc = json.loads(next(ln for ln in self.files["quota"].decode().splitlines() if ln.startswith("{")))
+        doc["limits"] = {s: v for s, v in doc["limits"].items() if s == site}
+        for key in ("jobs", "total_jobs"):
+            doc[key] = {u: {day: {s: v for s, v in sites.items() if s == site} for day, sites in days.items()}
+                        for u, days in doc[key].items()}  # fmt: skip
+        return json.dumps(doc).encode()
+
+    def test_quota_per_site_and_a_site_that_does_not_answer(self):
+        files = self.without("quota")
+        files["quota_grenoble"] = self.quota_of("grenoble")
+        files["quota_luxembourg"] = b""  # killed by the time limit
+        snap = fetch.build_snapshot(self.values, files, self.ref, CLUSTERS)
+        self.assertTrue(snap.quota("dahu").known)
+        self.assertFalse(snap.quota("larochette").known)
+        self.assertTrue(any(p.startswith("luxembourg: usagepolicycheck gave no answer") for p in snap.problems))
+        # a figure read a few minutes ago is better than none
+        before = fetch.build_snapshot(self.values, self.files, self.ref, CLUSTERS)
+        snap = fetch.build_snapshot(self.values, files, self.ref, CLUSTERS, previous=before)
+        self.assertTrue(snap.quota("larochette").known)
+
+    def test_progress(self):
+        p = fetch.Progress()
+        p.expected = {"grenoble", "rennes"}
+        for line in ("@@now 1791198617", "@@me jdoe"):
+            p.add_line(line)
+        import base64
+        import gzip
+
+        blob = base64.b64encode(gzip.compress(self.files["status_grenoble"])).decode()
+        p.add_line(f"@@file status_grenoble {blob}")
+        self.assertEqual(p.pending(), ["rennes"])
+        snap = p.snapshot(self.ref, ["yeti", "roazhon15"])
+        self.assertEqual((snap.clusters["yeti"].state, snap.clusters["roazhon15"].state), ("", "reading"))
+        p.add_line("@@file status_rennes.fail " + base64.b64encode(gzip.compress(b"x: timed out")).decode())
+        self.assertEqual(p.pending(), [])
+
+
+class HistoryCarryOver(unittest.TestCase):
+    def test_a_site_that_does_not_answer_keeps_its_clusters(self):
+        import json
+        import os
+        import tempfile
+        import time
+        from unittest import mock
+
+        from magrid.config import Config
+        from magrid.remote import Result
+
+        ref = fetch.Reference(sites=["grenoble", "rennes"], clusters={
+            "yeti": {"site": "grenoble", "queues": ["default"], "nodes": {}},
+            "paradoxe": {"site": "rennes", "queues": ["default"], "nodes": {}}})  # fmt: skip
+        hist_out = "@@now 1\n@@me me\n@@file hist_grenoble " + __import__("base64").b64encode(
+            __import__("gzip").compress(b"yeti 1790960737 5\n")).decode() + "\n"  # fmt: skip
+
+        class R:
+            here = None
+            calls = 0
+
+            def script(self, site, script, timeout=0):
+                R.calls += 1
+                return Result(0, hist_out, "")
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"XDG_CACHE_HOME": d}):
+            path = fetch._history_path()
+            old = fetch.History(fetched=time.time() - 2 * 86400, used={"paradoxe": [1790856179, 65], "yeti": [1, 1]},
+                                sites=["grenoble", "rennes"])  # fmt: skip
+            path.write_text(json.dumps(old.__dict__))
+            h = fetch.load_history(R(), Config(gateway="grenoble"), ref)
+            self.assertEqual(h.used["paradoxe"], [1790856179, 65])  # kept from last time
+            self.assertEqual(h.used["yeti"], [1790960737, 5])  # read again
+            self.assertEqual(h.sites, ["grenoble"])
+            fetch.load_history(R(), Config(gateway="grenoble"), ref)
+            self.assertEqual(R.calls, 1)  # within the hour: the cache
+            h.fetched -= 3700  # incomplete: asked again after an hour, not after a day
+            path.write_text(json.dumps(h.__dict__))
+            fetch.load_history(R(), Config(gateway="grenoble"), ref)
+            self.assertEqual(R.calls, 2)
