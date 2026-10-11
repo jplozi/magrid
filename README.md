@@ -159,7 +159,10 @@ interactive board; `usagepolicycheck --json` for the sites of your
 default-queue clusters, every ten minutes and after each of your actions; once
 a day, which clusters you used, with one query per site on the OAR databases'
 public read-only account (about a second each, five at nancy); once a week,
-the cluster descriptions, your group and your abaca priorities.
+the cluster descriptions, your group and your abaca priorities. Each piece is
+used as soon as it arrives: a site that is slow to answer shows "reading…"
+and holds back nothing else, and a site that does not answer keeps what was
+read from it before.
 
 Changing something, only after you confirm: `oarsub`, `oardel` and
 `oarwalltime`, on the frontend of the site concerned, with the exact command

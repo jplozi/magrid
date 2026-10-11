@@ -70,6 +70,12 @@ class FakeFrontend:
         files["jobs_grenoble"] = json.dumps(jobs).encode()
         return Result(0, framed(self.values, files), "")
 
+    def stream(self, site, script, on_line, timeout=0):
+        res = self.script(site, script, timeout)
+        for line in res.out.splitlines():
+            on_line(line)
+        return res
+
     def command(self, site, argv, timeout=0):
         if argv[0] == "oarstat":
             jid = argv[2]
@@ -288,8 +294,9 @@ class Board(Offline):
         rc, out = self.run_cli("board")
         self.assertEqual(rc, 0, out)
         rows = [ln.split()[0] for ln in out.splitlines() if ln.startswith(" ") and len(ln.split()) > 2 and ln.split()[1].isdigit()]
-        # used two days ago: in; chicoree, last used 100 days ago: out; reservable first, then abaca
-        self.assertEqual(rows, ["dahu", "yeti", "larochette", "granite", "grdix", "grosminet", "roazhon15"])
+        # used two days ago: in; chicoree, last used 100 days ago, is in only because a job of yours runs there;
+        # reservable first, then abaca
+        self.assertEqual(rows, ["dahu", "yeti", "chicoree", "larochette", "granite", "grdix", "grosminet", "roazhon15"])
         self.assertTrue(any("hist_" in s for s in self.front.scripts))
 
     def test_history_is_read_once_a_day(self):
@@ -311,6 +318,9 @@ class Board(Offline):
         rc, out = self.run_cli("board")
         rows = [ln.split()[0] for ln in out.splitlines() if ln.startswith(" ") and len(ln.split()) > 2 and ln.split()[1].isdigit()]
         self.assertEqual(rows, ["dahu", "chicoree", "larochette", "granite", "grdix", "roazhon15"])
+        rc, out = self.run_cli("hide", "chicoree")  # hidden, even with a job running there
+        rc, out = self.run_cli("board")
+        self.assertNotIn(" chicoree ", out.split("YOUR JOBS")[1].split("NOW")[1])
         rc, out = self.run_cli("add", "yeti")  # un-hides
         self.assertIn("hide = grosminet", self.config_text())
         self.assertNotIn("hide = yeti", self.config_text())

@@ -127,7 +127,7 @@ class Picker:
 
 
 class Board:
-    def __init__(self, app, stdscr):
+    def __init__(self, app, stdscr, initial=None):
         self.app = app
         self.screen = Screen(stdscr)
         self.scr = stdscr
@@ -151,6 +151,24 @@ class Board:
         self.picker: Optional[Picker] = None
         self.pending_focus: Optional[str] = None
         self.again = False
+        self.history_job: Optional[tuple[threading.Thread, dict]] = None
+        if app.history_stale and not app.read_only:
+            box: dict = {}
+
+            def work():
+                try:
+                    box["h"] = fetch.load_history(app.remote, app.cfg, app.ref, refresh=True)
+                except (RemoteError, fetch.FetchError, OSError):
+                    pass
+
+            thread = threading.Thread(target=work, daemon=True)
+            thread.start()
+            self.history_job = (thread, box)
+        self.initial = initial  # (thread, progress, result, names) while the first reading goes on
+        self.initial_seen = 0
+        self.initial_built = time.time()
+        if initial is not None:
+            self.loading = True
         self.quota_at = time.time()  # usagepolicycheck is read again every QUOTA_EVERY seconds, not every refresh
         self.quota_sites = self.default_sites()
         self.recompute()
@@ -163,7 +181,10 @@ class Board:
 
     def recompute(self) -> None:
         snap, cfg = self.snap, self.app.cfg
-        self.clusters = [snap.clusters[c] for c in self.on_board if c in snap.clusters]
+        ref = self.app.ref
+        held = [c for j in snap.jobs for c in j.clusters] if not self.app.words else []
+        names = selection.with_jobs(self.on_board, held, cfg, ref.clusters, ref.access)
+        self.clusters = [snap.clusters[c] for c in names if c in snap.clusters]
         _h, w = self.scr.getmaxyx()
         self.width = max(60, w)
         self.slots = views.visible_slots(avail.slots(snap.now), self.width)
@@ -204,7 +225,45 @@ class Board:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def take_initial(self) -> None:
+        """The first reading: show what has arrived, at most once a second, until it is complete."""
+        thread, progress, result, names = self.initial
+        if not thread.is_alive():
+            self.initial = None
+            if "snap" in result:
+                with self.lock:
+                    self.fresh = result["snap"]
+            else:
+                self.loading = False
+                self.say(f"could not read the platform: {result.get('error')}", WARN)
+            return
+        if progress.version != self.initial_seen and time.time() - self.initial_built >= 1.0:
+            self.initial_seen, self.initial_built = progress.version, time.time()
+            snap = progress.snapshot(self.app.ref, names)
+            if snap is not None:
+                self.app.snap = self.snap = snap
+                self.recompute()
+
+    def take_history(self) -> None:
+        """The history, read again in the background: the board follows it."""
+        thread, box = self.history_job
+        if thread.is_alive():
+            return
+        self.history_job = None
+        if "h" not in box:
+            return
+        self.app._history, self.app.history_stale = box["h"], False
+        board = self.app.board()
+        if board != self.on_board:
+            self.on_board = board
+            self.recompute()
+            self.refresh_async()
+
     def take_fresh(self) -> None:
+        if self.history_job is not None:
+            self.take_history()
+        if self.initial is not None:
+            self.take_initial()
         with self.lock:
             snap, err, self.fresh, self.error = self.fresh, self.error, None, None
         if err:
@@ -408,6 +467,9 @@ class Board:
     def draw_status(self, h: int) -> None:
         age = int(time.time() - self.loaded_at)
         state = "reading…" if self.loading else (f"read {age}s ago" if not self.app.read_only else "replay")
+        if self.initial is not None:
+            pending = self.initial[1].pending()
+            state = f"reading {', '.join(pending)}…" if pending else "reading…"
         picked = sum(self.picks.values())
         left = Line().add(" ")
         if self.message:
@@ -724,14 +786,36 @@ def run(app) -> int:
     from .cli import _known_clusters
 
     _known_clusters(app)
+    app.history_later = True
+    names = app.board()
+    progress = fetch.Progress()
+    result: dict = {}
+
+    def work():
+        try:
+            result["snap"] = fetch.fetch_state(app.remote, app.cfg, app.ref, names, progress=progress)
+        except (RemoteError, fetch.FetchError, OSError) as e:
+            result["error"] = e
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
     print("magrid: reading the platform…", end="", flush=True)
-    app.load()
+    # everything if it comes quickly; otherwise what has come after 3 s, the rest fills in on the board
+    while thread.is_alive() and (time.time() - progress.started < 3 or "now" not in progress.values):
+        time.sleep(0.05)
     print("\r" + " " * 40 + "\r", end="", flush=True)
+    if not thread.is_alive():
+        if "error" in result:
+            raise result["error"]
+        app.snap, initial = result["snap"], None
+    else:
+        app.snap, initial = progress.snapshot(app.ref, names), (thread, progress, result, names)
+    app.offset = time.time() - app.snap.now
 
     os.environ.setdefault("ESCDELAY", "25")  # Esc closes things at once, not after a second
 
     def main(stdscr):
-        Board(app, stdscr).loop()
+        Board(app, stdscr, initial).loop()
 
     try:
         curses.wrapper(main)

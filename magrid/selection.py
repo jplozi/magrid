@@ -64,6 +64,16 @@ def board(cfg: Config, clusters: dict[str, dict], access: dict[str, str], recent
     return order(names, clusters, access)
 
 
+def with_jobs(names: list[str], job_clusters: Iterable[str], cfg: Config, clusters: dict[str, dict],
+              access: dict[str, str]) -> list[str]:  # fmt: skip
+    """An auto board also shows the clusters where you hold jobs right now
+    (unless hidden): they are in use even if the history does not say so yet."""
+    if cfg.clusters != ["auto"]:
+        return names
+    extra = [c for c in job_clusters if c in clusters and c not in names and c not in cfg.hide]
+    return order(list(names) + extra, clusters, access) if extra else names
+
+
 @dataclass
 class Picked:
     clusters: list[str]

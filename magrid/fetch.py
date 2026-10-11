@@ -18,6 +18,7 @@ import gzip
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,7 +27,9 @@ from typing import Iterable, Optional
 from . import policy
 from .config import Config, cache_dir
 from .model import ACTIVE_STATES, Cluster, MyJob, Node, Snapshot, resv_from_api
-from .remote import FETCH_EPILOGUE, FETCH_PRELUDE, Remote, RemoteError, env_site_override, unpack
+from .remote import (FETCH_EPILOGUE, FETCH_PRELUDE, STREAM_EPILOGUE, STREAM_PRELUDE, Remote, RemoteError, env_site_override,
+                     unpack, unpack_line)  # fmt: skip
+from .timefmt import fmt_clock as datetime_clock
 
 REFERENCE_MAX_AGE = 7 * 86400
 REFERENCE_VERSION = 3  # bumped when the cached description gains fields
@@ -248,7 +251,7 @@ def history_script(sites: list[str], days: int = HISTORY_DAYS) -> str:
     return (
         FETCH_PRELUDE
         + f'for s in {" ".join(sites)}; do\n'
-        + "  ( PGPASSWORD=read PGCONNECT_TIMEOUT=8 psql -h oardb.$s.grid5000.fr -U oarreader oar2 -At -F' ' "
+        + "  ( PGPASSWORD=read PGCONNECT_TIMEOUT=3 psql -h oardb.$s.grid5000.fr -U oarreader oar2 -At -F' ' "
         + f'-c "{sql}" > "$d/hist_$s" 2>/dev/null || rm -f "$d/hist_$s" ) &\n'
         + "done\n"
         + FETCH_EPILOGUE
@@ -271,27 +274,42 @@ def parse_history(files: dict[str, bytes]) -> History:
     return h
 
 
+def cached_history(ref: Reference) -> tuple[Optional[History], bool]:
+    """The cached history, and whether it should be read again: after a day,
+    or after an hour when some site's database did not answer."""
+    try:
+        old = History(**json.loads(_history_path().read_text()))
+    except (OSError, ValueError, TypeError):
+        return None, True
+    complete = set(ref.sites) <= set(old.sites)
+    return old, not (old.age < 3600 or (complete and old.age < HISTORY_MAX_AGE))
+
+
 def load_history(remote: Remote, cfg: Config, ref: Reference, *, refresh: bool = False) -> History:
     """Which clusters the user has used recently; read once a day."""
     path = _history_path()
-    if not refresh and path.exists():
-        try:
-            h = History(**json.loads(path.read_text()))
-            if h.age < HISTORY_MAX_AGE:
-                return h
-        except (ValueError, TypeError):
-            pass
+    old, stale = cached_history(ref)
+    if not refresh and old is not None and not stale:
+        return old
     try:
         res = remote.script(_gateway(cfg, ref, remote), history_script(ref.sites), timeout=90)
         _values, files = unpack(res.out)
     except RemoteError:
         files = {}
     h = parse_history(files)
-    if h.sites:
-        try:
-            path.write_text(json.dumps(h.__dict__, separators=(",", ":")))
-        except OSError:
-            pass
+    if not h.sites:
+        return old or h  # nothing answered: keep what we had
+    missing = [s for s in ref.sites if s not in h.sites]
+    if missing:
+        # a site whose database did not answer keeps its clusters from last time, and is asked again within the hour
+        for c, v in (old.used.items() if old else []):
+            if ref.site_of(c) in missing and c not in h.used:
+                h.used[c] = v
+        # h.sites lacks the missing sites, so this cache is read again after an hour, not a day
+    try:
+        path.write_text(json.dumps(h.__dict__, separators=(",", ":")))
+    except OSError:
+        pass
     return h
 
 
@@ -318,20 +336,69 @@ def _extensions(events: list[dict]) -> list[tuple[int, int]]:
     return out
 
 
-def state_script(status_sites: list[str], job_sites: list[str], quota_sites: list[str]) -> str:
-    lines = [FETCH_PRELUDE]
-    lines.append(f'for s in {" ".join(job_sites)}; do get "jobs_$s" "sites/$s/jobs?user=$me&state={JOB_STATES}&limit=500" & done')
-    lines.append(f'for s in {" ".join(status_sites)}; do get "status_$s" "sites/$s/status?disks=no&vlans=no&subnets=no" & done')
-    if quota_sites:
-        lines.append(f'( usagepolicycheck --json -t --sites {",".join(quota_sites)} > "$d/quota" 2>/dev/null ) &')
-    lines.append("wait")
-    # sites where the user has jobs but that were not asked for: read their status too
+STATUS = "sites/$s/status?disks=no&vlans=no&subnets=no"
+QUOTA_TIMEOUT = 20  # seconds; usagepolicycheck takes under a second, but waits 40 s on a site whose database is down
+
+
+def state_script(status_sites: list[str], job_sites: list[str], quota_sites: list[str], *, job_nodes: bool = True) -> str:
+    """Status of the board's sites, the user's jobs on every site, the daytime
+    already used (usagepolicycheck, one process per site), and the status of
+    other sites where the user has jobs. Each piece is printed as soon as it
+    is complete, so that a slow site holds back nothing else."""
+    st = " ".join(status_sites)
+    lines = [STREAM_PRELUDE]
+    lines.append(f'for s in {st}; do get "status_$s" "{STATUS}" & done')
     lines.append(
-        'for f in "$d"/jobs_*; do s=${f##*/jobs_}; [ -e "$d/status_$s" ] && continue; '
-        "grep -q '\"total\":[1-9]' \"$f\" 2>/dev/null && get \"status_$s\" \"sites/$s/status?disks=no&vlans=no&subnets=no\" & done"
+        f'for s in {" ".join(quota_sites)}; do ( timeout {QUOTA_TIMEOUT} usagepolicycheck --json -t --sites $s '
+        f'> "$d/quota_$s" 2>/dev/null; emit "quota_$s" ) & done'
     )
-    lines.append(FETCH_EPILOGUE)
+    jobs = f'for s in {" ".join(job_sites)}; do get "jobs_$s" "sites/$s/jobs?user=$me&state={JOB_STATES}&limit=500" & done; wait'
+    if job_nodes:
+        jobs += (
+            f'; for s in {" ".join(job_sites)}; do case " {st} " in *" $s "*) continue;; esac; '
+            f"grep -q '\"total\":[1-9]' \"$d/jobs_$s\" 2>/dev/null && {{ ( flock 9; echo \"@@want $s\" ) 9>\"$d/.lock\"; "
+            f"get \"status_$s\" \"{STATUS}\"; }} & done; wait"
+        )
+    lines.append(f"( {jobs} ) &")
+    lines.append(STREAM_EPILOGUE)
     return "\n".join(lines)
+
+
+class Progress:
+    """What a state fetch has received so far, shared with the thread reading it."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.values: dict[str, str] = {}
+        self.files: dict[str, bytes] = {}
+        self.version = 0  # grows with every line received
+        self.started = time.time()
+        self.expected: set[str] = set()  # sites whose status was asked for
+        self.done = threading.Event()
+
+    def add_line(self, line: str) -> None:
+        with self.lock:
+            unpack_line(line, self.values, self.files)
+            if line.startswith("@@want "):
+                self.expected.add(line[7:].strip())  # the status of a site where the user has jobs
+            self.version += 1
+
+    def copy(self) -> tuple[dict[str, str], dict[str, bytes]]:
+        with self.lock:
+            return dict(self.values), dict(self.files)
+
+    def pending(self) -> list[str]:
+        """Sites whose status has not arrived yet."""
+        with self.lock:
+            return sorted(s for s in self.expected if f"status_{s}" not in self.files and f"status_{s}.fail" not in self.files)
+
+    def snapshot(self, ref: "Reference", clusters: list[str], previous: Optional[Snapshot] = None) -> Optional[Snapshot]:
+        """A snapshot of what has arrived; the clusters of pending sites are marked as being read."""
+        pending = set(self.pending())
+        values, files = self.copy()
+        if "now" not in values:
+            return None
+        return build_snapshot(values, files, ref, clusters, pending=pending, previous=previous)
 
 
 def parse_quota(blob: bytes, me: str) -> tuple[dict[str, policy.Quota], list[str]]:
@@ -365,13 +432,26 @@ def parse_quota(blob: bytes, me: str) -> tuple[dict[str, policy.Quota], list[str
     return quotas, flagged
 
 
-def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Reference, want: list[str]) -> Snapshot:
-    """Assemble a Snapshot from the raw pieces of a state fetch."""
+def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Reference, want: list[str], *,
+                   pending: Iterable[str] = (), previous: Optional[Snapshot] = None) -> Snapshot:  # fmt: skip
+    """Assemble a Snapshot from the raw pieces of a state fetch.
+
+    pending: sites whose status has not arrived yet. For those, and for sites
+    whose status could not be read, the clusters of `previous` are kept
+    (marked stale), or marked as being read (or unread) when there are none.
+    """
     snap = Snapshot(now=int(values.get("now") or time.time()), me=values.get("me") or ref.me, gga=ref.gga)
     snap.level = policy.level(ref.level)
+    pending = set(pending)
     for name, blob in files.items():
-        if name.endswith(".fail"):
-            snap.problems.append(blob.decode(errors="replace").strip())
+        if not name.endswith(".fail"):
+            continue
+        kind, _, site = name[:-5].partition("_")
+        detail = blob.decode(errors="replace").strip().split(": ", 1)[-1][:90]
+        if kind == "jobs":
+            snap.problems.append(f"{site}: your jobs there could not be read ({detail})")
+        elif kind != "status":  # failed statuses are reported below, with what is shown instead
+            snap.problems.append(f"{name[:-5]}: {detail}")
 
     status: dict[str, dict] = {}  # site -> fqdn -> node status
     for name, blob in files.items():
@@ -389,6 +469,14 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             snap.problems.append(f"unknown cluster: {cname}")
             continue
         site = d["site"]
+        if site not in status and previous is not None and cname in previous.clusters and previous.clusters[cname].state in ("", "stale"):
+            old = copy.deepcopy(previous.clusters[cname])  # keep what was read last time
+            old.as_of = old.as_of or previous.now
+            old.state = "stale"
+            snap.clusters[cname] = old
+            if site not in pending and not any(p.startswith(f"{site}: ") for p in snap.problems):
+                snap.problems.append(f"{site}: the Grid'5000 API did not answer; showing what was read at {_clock(old.as_of)}")
+            continue
         c = Cluster(
             name=cname, site=site, queues=tuple(d["queues"]), exotic=d["exotic"], cpu=d["cpu"], sockets=d["sockets"],
             cores_per_node=d["cores"], threads_per_node=d["threads"], ram_gib=d["ram_gib"],
@@ -402,7 +490,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
                 node.access = ref.access.get(nd["nodeset"], "none")
             s = (st or {}).get(node.fqdn)
             if st is None:
-                node.hard, node.comment = "unknown", "status not read"
+                node.hard, node.comment = "unknown", "reading…" if site in pending else "status not read"
             elif s is None:
                 node.hard, node.comment = "dead", "not known to OAR"
             else:
@@ -412,9 +500,12 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
                 node.resvs = [resv_from_api(r) for r in s.get("reservations") or []]
             c.nodes.append(node)
         c.nodes.sort(key=lambda n: n.number)
+        c.as_of = snap.now
+        if site not in status:
+            c.state = "reading" if site in pending else "unread"
         snap.clusters[cname] = c
-        if site not in status and site not in [p.split(":")[0] for p in snap.problems]:
-            snap.problems.append(f"{site}: status not available")
+        if c.state == "unread" and not any(p.startswith(f"{site}: ") for p in snap.problems):
+            snap.problems.append(f"{site}: the Grid'5000 API did not answer; its clusters cannot be shown")
 
     # the user's jobs, with the nodes they hold
     for name, blob in sorted(files.items()):
@@ -446,19 +537,27 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             snap.jobs.append(job)
     snap.jobs.sort(key=lambda j: (j.resv.start or 10**12, j.site, j.job_id))
 
-    # daytime quotas
-    if "quota" in files:
+    # daytime quotas: one usagepolicycheck per site (older recordings: one for all)
+    for name, blob in sorted(files.items()):
+        if name != "quota" and not (name.startswith("quota_") and not name.endswith(".fail")):
+            continue
+        site = name[6:] if name != "quota" else ""
         try:
-            quotas, snap.flagged = parse_quota(files["quota"], snap.me)
+            quotas, flagged = parse_quota(blob, snap.me)
             snap.quotas.update(quotas)
-        except (ValueError, KeyError, TypeError) as e:
-            snap.problems.append(f"usagepolicycheck gave no usable answer ({e}): today's earlier usage is unknown")
+            snap.flagged += flagged
+        except (ValueError, KeyError, TypeError):
+            where = f"{site}: " if site else ""
+            snap.problems.append(f"{where}usagepolicycheck gave no answer (in {QUOTA_TIMEOUT} s); your daytime use there today "
+                                 f"is counted from the jobs magrid can see")  # fmt: skip
     seen: Optional[dict] = None
     for cname, c in snap.clusters.items():
         if c.kind != "default":
             continue
         if cname in snap.quotas:
             c.quota_cores = snap.quotas[cname].cluster_cores
+        elif previous is not None and cname in previous.quotas and previous.quotas[cname].known:
+            snap.quotas[cname] = copy.deepcopy(previous.quotas[cname])  # read a few minutes ago: still right
         else:
             # usagepolicycheck gave nothing: count at least the user's jobs that are still visible
             if seen is None:
@@ -466,6 +565,10 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             snap.quotas[cname] = policy.Quota(c.quota_cores, dict(seen.get(cname, {})), known=False)
         snap.quotas[cname].node_cores = c.cores_per_node
     return snap
+
+
+def _clock(ts: int) -> str:
+    return datetime_clock(ts)
 
 
 def save_recording(path: Path, ref: Reference, values: dict[str, str], files: dict[str, bytes],
@@ -522,38 +625,48 @@ def _visible_usage(snap: Snapshot) -> dict[str, dict]:
 
 
 def fetch_state(remote: Remote, cfg: Config, ref: Reference, clusters: list[str], *, quota: bool = True,
-                previous: Optional[Snapshot] = None) -> Snapshot:  # fmt: skip
-    """The state of the clusters' sites. Without quota, the daytime usage
-    read by usagepolicycheck is taken over from `previous` (it only changes
-    with the user's own jobs, and the tool is heavier than the rest)."""
+                previous: Optional[Snapshot] = None, progress: Optional[Progress] = None,
+                job_nodes: bool = True) -> Snapshot:  # fmt: skip
+    """The state of the clusters' sites, streamed into `progress` as it arrives.
+
+    Without quota, the daytime usage read by usagepolicycheck is taken over
+    from `previous` (it only changes with the user's own jobs, and the tool is
+    heavier than the rest). job_nodes: also read the status of the other sites
+    where the user has jobs, to know their nodes.
+    """
     sites = []
     for c in clusters:
         s = ref.site_of(c)
         if s and s not in sites:
             sites.append(s)
     quota_sites = sorted({ref.site_of(c) for c in clusters if ref.site_of(c) and "default" in ref.clusters[c]["queues"]})
-    script = state_script(sites, ref.sites, quota_sites if quota else [])
+    script = state_script(sites, ref.sites, quota_sites if quota else [], job_nodes=job_nodes)
+    progress = progress or Progress()
+    progress.expected = set(sites)
     gw = _gateway(cfg, ref, remote)
     try:
-        res = remote.script(gw, script, timeout=120)
-    except RemoteError:
-        others = [s for s in sites if s != gw]
-        if not others:
-            raise
-        res = remote.script(others[0], script, timeout=120)  # the gateway is down: try another frontend
-    values, files = unpack(res.out)
+        try:
+            remote.stream(gw, script, progress.add_line, timeout=150)
+        except RemoteError:
+            others = [s for s in sites if s != gw]
+            if not others:
+                raise
+            remote.stream(others[0], script, progress.add_line, timeout=150)  # the gateway is down: try another frontend
+    finally:
+        progress.done.set()
+    values, files = progress.copy()
     if "now" not in values:
-        raise FetchError("the gateway frontend did not answer as expected: " + (res.err.strip() or res.out[:200]))
+        raise FetchError("the gateway frontend did not answer as expected")
     if os.environ.get("MAGRID_RECORD"):
         save_recording(Path(os.environ["MAGRID_RECORD"]), ref, values, files, clusters)
-    snap = build_snapshot(values, files, ref, clusters)
+    snap = build_snapshot(values, files, ref, clusters, previous=previous)
     if not quota and previous is not None:
-        for cname, q in previous.quotas.items():
-            if q.known and cname in snap.quotas:
-                snap.quotas[cname] = copy.deepcopy(q)
         snap.flagged = list(previous.flagged)
-    if quota and quota_sites and "quota" not in files:
-        snap.problems.append("usagepolicycheck did not run: today's earlier usage is unknown")
+    if quota:
+        for s in quota_sites:
+            if f"quota_{s}" not in files and not any(p.startswith(f"{s}: usagepolicycheck") for p in snap.problems):
+                snap.problems.append(f"{s}: usagepolicycheck gave no answer; your daytime use there today is counted "
+                                     f"from the jobs magrid can see")  # fmt: skip
     return snap
 
 

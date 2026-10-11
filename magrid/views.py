@@ -174,6 +174,8 @@ def cluster_label(c: Cluster, snap: Snapshot) -> tuple[Line, Line]:
     else:
         acc = c.access
         note = {"besteffort": "best-effort only", "none": "no access", "": "abaca"}.get(acc, f"abaca {acc}")
+    if c.state == "stale" and snap.now - c.as_of > 120:
+        note = f"as read at {fmt_clock(c.as_of)}"  # the site did not answer since
     l2 = Line().add(" ").add(f"{c.site}", DIM).add(f" · {note}" if note else "", DIM)
     return l1.clip(NAME_W).pad(NAME_W), l2.clip(NAME_W).pad(NAME_W)
 
@@ -203,22 +205,54 @@ def slot_header(slot: Slot, now: int, margin: int) -> tuple[str, str]:
     return slot.label.upper(), sub
 
 
+def _short_when(ts: int, now: int) -> str:
+    """19:00 today, Wed this week, 12 Oct later: for cells too narrow for fmt_when."""
+    d, n = cal.to_dt(ts), cal.to_dt(now)
+    days = (d.date() - n.date()).days
+    if days == 0:
+        return f"{d:%H:%M}"
+    if 0 < days < 7:
+        return f"{d:%a}"
+    return f"{d.day} {d:%b}"
+
+
+def _marked(variants: list[str], st: St, mark: str, width: int, bg: Optional[int]) -> Line:
+    """Text and the user's marker (●2) in a cell. The marker always shows: the
+    first text variant that fits beside it is used, else the last one is cut."""
+    room = width - (len(mark) + 1 if mark else 0)
+    text = next((v for v in variants if len(v) <= room), None)
+    if text is None:
+        text = variants[-1][: max(0, room - 1)] + "…" if room > 1 else ""
+    ln = Line().add(text, st.on(bg))
+    if mark:
+        ln.add(" ", St(bg=bg)).add(mark, MINE.on(bg))
+    return ln.clip(width).pad(width, St(bg=bg))
+
+
 def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False, pick: int = 0,
                window: Optional[Window] = None, compact: bool = False) -> tuple[Line, Line]:  # fmt: skip
     """The two lines of a board cell for a reservation offer. In a compact
-    board only the first is shown, so it must carry what matters."""
+    board only the first is shown, so it must carry what matters: why the slot
+    cannot be booked, and how many nodes you already hold there (●2)."""
     now = snap.now
     bg = BG_SELECT if focus else None
+    fill = St(bg=bg)
+    if offer.cluster.state in ("reading", "unread"):
+        return cell("reading…" if offer.cluster.state == "reading" else "not read", width, VDIM.on(bg)), cell("", width, fill)
     w = window or offer.best
+    start, end = (w.start, w.end) if w is not None else (offer.slot.start, offer.slot.period.end)
+    mine = _mine_in(offer.cluster, snap, start, end)
+    mark = f"●{mine}" if mine else ""
+    if offer.opens:
+        reason, reason_st = [f"opens {fmt_when(offer.opens, now)}", f"opens {_short_when(offer.opens, now)}"], WARN
+    else:
+        reason, reason_st = ["site limit"], BAD  # 2 advance reservations waiting at the site (silver level)
     if compact and w is not None and offer.blocked:
-        text = f"opens {fmt_when(offer.opens, now)}" if offer.opens else "limit reached"
-        l1 = Line().add(text, (WARN if offer.opens else BAD).on(bg))
-        return l1.clip(width).pad(width, St(bg=bg)), Line().pad(width, St(bg=bg))
+        return _marked(reason, reason_st, mark, width, bg), Line().pad(width, fill)
     if w is None:
         held = [x for x in offer.windows if x.blocker is not None]
         why = "all busy" if held else "no usable node"
-        l1, l2 = cell("–", width, VDIM.on(bg)), cell(why, width, VDIM.on(bg))
-        return l1, l2
+        return _marked(["–"], VDIM, mark, width, bg), cell(why, width, VDIM.on(bg))
     count = offer.count
     k = pick or 0
     usual = w.limited_by == "period" and w.start <= offer.slot.start + 120
@@ -228,28 +262,26 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         st1 = St(WHITE, bold=True)
     else:
         st1 = OKB if usual else WARNB
-    head = f"{k} of {count}" if pick else f"{count}"
-    l1 = Line().add(f"{head} {TIMES} {fmt_dur(w.duration)}", st1.on(bg))
-    mine = _mine_in(offer.cluster, snap, w.start, w.end)
-    if mine:
-        l1.add(f" ●{mine}", MINE.on(bg))
+    dur = fmt_dur(w.duration)
+    heads = [f"{k} of {count} {TIMES} {dur}", f"{k}/{count} {TIMES} {dur}"] if pick else [f"{count} {TIMES} {dur}"]
+    l1 = _marked(heads, st1, mark, width, bg)
     if offer.blocked:
-        if offer.opens:
-            l2 = Line().add(f"opens {fmt_when(offer.opens, now)}", WARN.on(bg))
-        else:
-            l2 = Line().add("limit reached", BAD.on(bg))
+        l2 = Line().add(next((r for r in reason if len(r) <= width), reason[-1]), reason_st.on(bg))
     elif w.start <= offer.slot.start + 120:
         quiet = St(252) if focus else DIM
         l2 = Line().add(f"{ARROW}{fmt_when(w.end, now)}", (quiet if usual else WARN).on(bg))
     else:
         l2 = Line().add(f"{fmt_when(w.start, now)}{ARROW}{fmt_clock(w.end)}", WARN.on(bg))
-    return l1.clip(width).pad(width, St(bg=bg)), l2.clip(width).pad(width, St(bg=bg))
+    return l1, l2.clip(width).pad(width, fill)
 
 
 def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False, pick: int = 0) -> tuple[Line, Line]:
     """The wide cell of a cluster whose jobs are queued (abaca, best-effort)."""
     now = snap.now
     bg = BG_SELECT if focus else None
+    if offer.cluster.state in ("reading", "unread"):
+        text = f"reading {offer.cluster.site}…" if offer.cluster.state == "reading" else f"{offer.cluster.site}: no answer from the API"
+        return cell(text, width, VDIM.on(bg)), cell("", width, St(bg=bg))
     if offer.mode == "none":
         return cell(offer.blocked, width, VDIM.on(bg)), cell("", width, St(bg=bg))
     free = sum(1 for t, _ in offer.est if t <= now + 120)
