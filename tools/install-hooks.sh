@@ -10,7 +10,8 @@ cat > .git/hooks/post-commit <<'EOF'
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || exit 0
 (
   echo "== $(date '+%F %T') $(git rev-parse --short HEAD)"
-  git push --quiet origin main && tools/mirror-github.py
+  git push --quiet origin main || echo "push to origin failed"
+  tools/mirror-github.py
 ) >> .git/mirror.log 2>&1 &
 EOF
 chmod +x .git/hooks/post-commit
