@@ -22,7 +22,7 @@ REMOTE = "github"
 URL = "git@github.com:jplozi/magrid.git"
 SOURCE = "main"
 BRANCH = "github-main"  # the local rewritten branch
-DROP = ("Co-Authored-By: Claude",)
+DROP = ("Co-Authored-By: Claude", "Claude-Session:")
 
 
 def git(*args: str, inp: str | None = None, env: dict | None = None) -> str:

@@ -22,8 +22,10 @@ clusters = auto
 add =
 hide =
 
-# How to reach the frontend of a site. {site} is replaced by the site name.
-# When magrid runs on a frontend, that site is reached directly.
+# How to reach the frontend of a site. {site} is replaced by the site name:
+# an alias of your ssh configuration that goes through access.grid5000.fr
+# (README, "Reaching the frontends"). When magrid runs on a frontend, that
+# site is reached directly.
 ssh = {site}.g5k
 
 # The frontend used to read the state of all sites (through the Grid'5000 API).

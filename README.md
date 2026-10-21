@@ -143,14 +143,48 @@ tests) runs offline.
 ## Usage
 
 magrid needs Python 3.9 or later and nothing else. It runs on the user's
-machine and reaches each site's frontend through ssh, with the host alias
-pattern given in the configuration (`{site}.g5k` by default).
+machine, or on a frontend.
 
 ```
-git clone https://github.com/jplozi/magrid.git
-ln -s "$PWD/magrid/bin/magrid" ~/.local/bin/magrid
+pipx install git+https://github.com/jplozi/magrid.git
 magrid doctor
 ```
+
+pipx puts the `magrid` command in `~/.local/bin`. From a checkout,
+`pipx install -e .` installs it in place, and `bin/magrid` runs it without
+installing anything.
+
+### Reaching the frontends
+
+magrid runs `ssh <alias>` for each site, with the alias pattern given in the
+configuration (`{site}.g5k` by default). The configuration Grid'5000
+recommends, in `~/.ssh/config`:
+
+```
+Host g5k
+  User <login>
+  Hostname access.grid5000.fr
+  ForwardAgent no
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%C
+  ControlPersist 4h
+
+Host *.g5k
+  User <login>
+  ProxyCommand ssh g5k -W "$(basename %h .g5k):%p"
+  ForwardAgent no
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%C
+  ControlPersist 4h
+```
+
+The gateway only forwards the connection (`-W`); from 29 October 2026 it
+runs no command at all, so an older `ProxyCommand ssh g5k nc ...` stops
+working on that date. The `ControlMaster` lines keep one connection per host
+open and reuse it, which the interactive board (one reading per minute)
+needs: magrid goes through that connection when the configuration defines
+one, and otherwise keeps one of its own for five minutes. `magrid doctor`
+reports both points.
 
 ```
 magrid                          interactive board
@@ -213,7 +247,7 @@ Grid'5000 API (node status, the user's jobs), `usagepolicycheck --json` for
 the sites of the default-queue clusters shown (every ten minutes in the
 interactive board, and after each action), one query per site on the OAR
 databases once a day, and the reference API once a week. Nothing is run on a
-node.
+node, and nothing on the access machine, which only forwards the connections.
 
 Modifying, only after confirmation: `oarsub`, `oardel` and `oarwalltime` on
 the frontend of the site concerned, with the exact command printed first.
