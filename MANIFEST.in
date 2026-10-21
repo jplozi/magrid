@@ -1,0 +1,5 @@
+# What the source distribution carries besides the package: the tests with
+# their fixtures, so that the suite can be run from it, and the rules.
+include docs/rules.md
+recursive-include tests *
+global-exclude __pycache__ *.py[cod]

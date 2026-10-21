@@ -8,7 +8,7 @@ corresponding `oarsub` commands. Reservations are checked against the rules
 before submission, at the time of submission, and once more after OAR has
 recorded them.
 
-![The interactive board](docs/board.png)
+![The interactive board](https://raw.githubusercontent.com/jplozi/magrid/main/docs/board.png)
 
 ## Motivation
 
@@ -142,17 +142,17 @@ tests) runs offline.
 
 ## Usage
 
-magrid needs Python 3.9 or later and nothing else. It runs on the user's
-machine, or on a frontend.
+magrid needs Python 3.9 or later and nothing else (Linux or macOS, with ssh
+and a terminal). It runs on the user's machine, or on a frontend.
 
 ```
 pipx install git+https://github.com/jplozi/magrid.git
 magrid doctor
 ```
 
-pipx puts the `magrid` command in `~/.local/bin`. From a checkout,
-`pipx install -e .` installs it in place, and `bin/magrid` runs it without
-installing anything.
+pipx puts the `magrid` command in `~/.local/bin`; `pip install` of the same
+URL works in a virtual environment. From a checkout, `pipx install -e .`
+installs it in place, and `bin/magrid` runs it without installing anything.
 
 ### Reaching the frontends
 
@@ -277,6 +277,10 @@ the frontend of the site concerned, with the exact command printed first.
   logins, groups and job numbers replaced.
 - `tools/screenshot.py` regenerates `docs/board.png` from a synthetic state
   (requires matplotlib).
+- `pip install -e .` in a virtual environment installs a checkout in place.
+  The test suite runs on GitHub Actions for Python 3.9 to 3.14 at each push
+  (`.github/workflows/tests.yml`), followed by a build of the package and a
+  run of the installed command on a recorded state.
 - The repository is developed on gitlab.inria.fr and mirrored to GitHub with
   `tools/mirror-github.py`.
 
