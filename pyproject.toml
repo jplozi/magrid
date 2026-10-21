@@ -4,17 +4,42 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "magrid"
-version = "0.1.0"
-description = "Book Grid'5000 machines without breaking the Usage Policy"
+dynamic = ["version"]
+description = "Grid'5000 reservation tool that applies the Usage Policy rules"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []
+authors = [{ name = "Jean-Pierre Lozi" }]
+keywords = ["Grid'5000", "OAR", "reservation", "usage policy"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Environment :: Console :: Curses",
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: System :: Distributed Computing",
+]
+
+[project.urls]
+Homepage = "https://github.com/jplozi/magrid"
+Repository = "https://github.com/jplozi/magrid"
 
 [project.scripts]
 magrid = "magrid.cli:main"
 
 [tool.setuptools]
 packages = ["magrid"]
+
+[tool.setuptools.dynamic]
+version = { attr = "magrid.__version__" }
 
 [tool.ruff]
 line-length = 130
