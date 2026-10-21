@@ -6,7 +6,14 @@ frontend with ssh, through whatever host alias the user already has
 without ssh.
 
 Only short commands are ever run there: curl against the Grid'5000 API,
-usagepolicycheck, oarstat, oarsub, oardel, oarwalltime.
+usagepolicycheck, oarstat, oarsub, oardel, oarwalltime. Nothing is run on
+the gateway (access.grid5000.fr): the alias is expected to go through it
+with a ProxyCommand that only forwards the connection (ssh -W), which is
+all the gateway allows from 2026-10-29.
+
+When the user's ssh configuration shares connections (ControlMaster auto),
+magrid goes through the shared connection and opens none of its own;
+otherwise it keeps one connection per frontend open for five minutes.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ from __future__ import annotations
 import base64
 import gzip
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -44,30 +52,74 @@ def local_site() -> Optional[str]:
     return None
 
 
+def ssh_settings(host: str) -> dict[str, str]:
+    """The options ssh would use for host, as the user's configuration sets
+    them (ssh -G: read locally, nothing is connected). Empty if ssh is missing."""
+    try:
+        p = subprocess.run(["ssh", "-G", host], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if p.returncode != 0:
+        return {}
+    settings: dict[str, str] = {}
+    for ln in p.stdout.splitlines():
+        key, _, value = ln.partition(" ")
+        settings.setdefault(key, value)  # a repeated key (identityfile): the first one
+    return settings
+
+
+def shares_connections(settings: dict[str, str]) -> bool:
+    """Does the user's configuration already keep one connection per host
+    (ControlMaster auto with a ControlPath)?"""
+    return settings.get("controlmaster") in ("auto", "autoask") and settings.get("controlpath", "none") != "none"
+
+
+def gateway_check(settings: dict[str, str], host: str) -> tuple[Optional[bool], str, str]:
+    """How host is reached, for `magrid doctor`: (verdict, text, detail).
+    access.grid5000.fr forwards connections (ssh -W, ProxyJump) and, from
+    2026-10-29, runs no command: a ProxyCommand that runs nc there stops
+    working on that date."""
+    jump = settings.get("proxyjump", "none")
+    cmd = settings.get("proxycommand", "none")
+    if jump != "none":
+        return True, f"ssh: {host} is reached through ProxyJump {jump}", ""
+    if cmd == "none":
+        return None, f"ssh: {host} is reached directly", "right on a Grid'5000 machine; from outside, go through access.grid5000.fr (README)"
+    if not cmd.startswith("ssh "):
+        return None, f"ssh: {host} is reached through a ProxyCommand", cmd
+    if re.search(r"(^|\s)-W(\s|$)", cmd):
+        return True, f"ssh: {host} is reached through the gateway, which only forwards the connection", cmd
+    return (False, f"ssh: the ProxyCommand for {host} runs a command on the gateway",
+            f"refused by access.grid5000.fr from 2026-10-29; use  ssh g5k -W \"$(basename %h .g5k):%p\"  (now: {cmd})")
+
+
 class Remote:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.here = local_site()
         self.log: list[str] = []  # every command sent, for --verbose and for the report
+        self.sharing: dict[str, bool] = {}  # host -> the user's configuration shares connections to it
 
     def host(self, site: str) -> str:
         if self.here is not None and self.cfg.ssh == "{site}.g5k":
             return site  # on a frontend, the other frontends are simply "lille", "nancy", ...
         return self.cfg.ssh.format(site=site)
 
+    def shared(self, host: str) -> bool:
+        """Does the user's ssh configuration share connections to host? Then
+        magrid goes through the shared connection and opens none of its own."""
+        if host not in self.sharing:
+            self.sharing[host] = shares_connections(ssh_settings(host))
+        return self.sharing[host]
+
     def _argv(self, site: str) -> list[str]:
         if site == self.here:
             return ["bash", "-s"]
-        return [
-            "ssh",
-            "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=15",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={cache_dir()}/cm-%C",
-            "-o", "ControlPersist=300",
-            self.host(site),
-            "bash -s",
-        ]  # fmt: skip
+        host = self.host(site)
+        argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+        if not self.shared(host):  # one connection per frontend, kept for five minutes
+            argv += ["-o", "ControlMaster=auto", "-o", f"ControlPath={cache_dir()}/cm-%C", "-o", "ControlPersist=300"]
+        return argv + [host, "bash -s"]
 
     def script(self, site: str, script: str, timeout: int = 90) -> Result:
         """Run a bash script on the frontend of a site (the script goes on stdin)."""

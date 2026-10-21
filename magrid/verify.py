@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from . import checker, policy, verified
 from .model import MyJob, Resv, Snapshot
 from .oar import Outcome
-from .remote import FETCH_EPILOGUE, FETCH_PRELUDE, RemoteError, unpack
+from .remote import FETCH_EPILOGUE, FETCH_PRELUDE, RemoteError, gateway_check, shares_connections, ssh_settings, unpack
 from .term import BAD, BADB, DIM, HEAD, MINE, OK, OKB, WARN, WARNB, Line, St, line, wrap, SKY
 from .timefmt import fmt_dur, fmt_range, fmt_ts
 
@@ -142,6 +142,19 @@ def doctor(app) -> int:
         out.append(ln)
 
     say(True, f"configuration: {app.cfg.path}" + ("" if app.cfg.path.exists() else " (not created yet, defaults in use)"))
+    if app.remote.here is None:  # read locally, before anything is connected
+        host = app.remote.host(_gateway(app.cfg, app.ref, app.remote))
+        settings = ssh_settings(host)
+        if not settings:
+            say(False, "ssh is not installed, or cannot read its configuration")
+        else:
+            say(*gateway_check(settings, host))
+            if shares_connections(settings):
+                say(True, f"ssh: one shared connection to {host}",
+                    f"ControlMaster {settings['controlmaster']}, ControlPersist {settings.get('controlpersist', 'no')}")  # fmt: skip
+            else:
+                say(None, f"ssh: your configuration shares no connection to {host}",
+                    "magrid keeps one of its own for 5 minutes; for the interactive board, set ControlMaster auto (README)")  # fmt: skip
     try:
         ref = load_reference(app.remote, app.cfg, refresh=True)
         app.ref = ref
