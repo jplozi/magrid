@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import avail, fetch, oar, plan, policy, selection, verify, views
-from .model import Snapshot
+from .model import OAR_GAP, Snapshot
 from .remote import RemoteError
 from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, emit, line, text_colour, wrap
 from .timefmt import fmt_dur, fmt_ts, fmt_when
@@ -575,10 +575,11 @@ class Board:
             new_end = opts[-1].end
             node = snap.node(j.nodes[0]) if j.nodes else None
             if node is not None:
-                nxt = [b[0] for b in node.busy(snap.now, skip_job=r.job_id) if b[0] >= r.end - 60]
-                if nxt and min(nxt) < new_end:
-                    new_end = min(nxt) - app.cfg.margin
-                    print(f" The node is taken from {fmt_ts(min(nxt))}: extending until {fmt_ts(new_end)}.")
+                nxt = [b for b in node.busy(snap.now, skip_job=r.job_id) if b[0] + OAR_GAP >= r.end - 60]
+                first = min(nxt, key=lambda b: b[0]) if nxt else None
+                if first is not None and first[0] < new_end:
+                    new_end = first[0] - first[0] % 60  # a whole minute; OAR's gap before the next job is inside first[0]
+                    print(f" The node is taken from {fmt_ts(first[2].start)}: extending until {fmt_ts(new_end)}.")
             if new_end <= r.end + 60:
                 print(" Nothing to extend right now." + (f" {opts[-1].hint}" if opts[-1].hint else ""))
                 return

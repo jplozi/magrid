@@ -804,7 +804,7 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
         if offer.mode == "reserve":
             if nw.start:
                 until = f"until {fmt_when(nw.until, now)}" if nw.until < 10**10 else "onwards"
-                ln.add(f"free {fmt_when(nw.start, now)} {until}" if nw.start > offer.slot.start + 120 else f"free {until}", OK)
+                ln.add(f"free {fmt_when(nw.start, now)} {until}" if nw.start > offer.slot.start + 60 else f"free {until}", OK)
                 if nw.next is not None:
                     person, pst = _person(nw.next, snap, team, names)
                     ln.add("  then ", DIM).add(person, pst)

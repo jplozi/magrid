@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__, audit, avail, config, fetch, oar, plan, policy, selection, verify, views
-from .model import Snapshot
+from .model import OAR_GAP, Snapshot
 from .remote import Remote, RemoteError
 from .term import BAD, BADB, DIM, HEAD, OK, OKB, PLAIN, TITLE, WARN, Line, emit, line, set_theme, term_width, use_color, wrap
 from .timefmt import TimeError, fmt_dur, fmt_ts, fmt_when, parse_duration, parse_time
@@ -609,10 +609,12 @@ def cmd_extend(app: App, args) -> int:
         hist = tuple(j.extensions)
         opts = policy.extension_options(now, r.submitted, r.start, r.end, cores=cores, quota=quota, margin=app.cfg.margin, history=hist)
         node = snap.node(j.nodes[0]) if j.nodes else None
-        free_until = None
+        free_until = taken_from = None  # the last second OAR allows (its gap included), and when the next job starts
         if node is not None:  # what comes next on the node
-            nxt = [b for b in node.busy(now, skip_job=r.job_id) if b[0] >= r.end - 60]
-            free_until = min((b[0] for b in nxt), default=None)
+            nxt = [b for b in node.busy(now, skip_job=r.job_id) if b[0] + OAR_GAP >= r.end - 60]
+            if nxt:
+                first = min(nxt, key=lambda b: b[0])
+                free_until, taken_from = first[0], first[2].start
         lines.append(Line())
         lines.append(line(" What the rules allow right now:", HEAD))
         for o in opts:
@@ -625,7 +627,7 @@ def cmd_extend(app: App, args) -> int:
             if o.hint:
                 lines.append(line(f"     · {o.hint}", DIM))
         if free_until is not None:
-            lines.append(line(f"   The node is taken by someone else from {fmt_ts(free_until)}.", WARN))
+            lines.append(line(f"   The node is taken by someone else from {fmt_ts(taken_from)}.", WARN))
         try:
             if args.until:
                 new_end = parse_time(args.until, now)
@@ -639,7 +641,7 @@ def cmd_extend(app: App, args) -> int:
         except TimeError as e:
             raise SystemExit(f"magrid: {e}")
         if free_until is not None and new_end > free_until:
-            new_end = free_until - app.cfg.margin
+            new_end = free_until - free_until % 60  # a whole minute, OAR's gap before the next job kept
             lines.append(line(f"   Shortened to {fmt_ts(new_end)} because of the next reservation.", WARN))
         v = policy.judge_extension(now, r.submitted, r.start, r.end, new_end, cores=cores, quota=quota, cluster=cname, history=hist)
         lines.append(Line())
@@ -647,7 +649,7 @@ def cmd_extend(app: App, args) -> int:
         lines += views.verdict_lines(v, width, indent="   ")
     app.out(lines)
     seconds = new_end - r.end
-    if seconds <= 0:
+    if seconds <= 60:  # as in the board: a minute or less is not worth a request
         print(" Nothing to extend.")
         return 1
     if not v.ok:

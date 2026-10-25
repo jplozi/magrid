@@ -154,11 +154,14 @@ def _stretches(node: Node, now: int, start: int, limit: int) -> list[NodeWindow]
         if b <= start:
             continue
         s = max(a, start)
+        if a > start:
+            s = -(-s // 60) * 60  # a stretch opening after a job (OAR's gap included) starts on a whole minute
         if s >= limit:
             break
         before = next((r for _bs, be, r in busy if be == a), None) if a > start else None
         after = next((r for bs, _be, r in busy if bs == b), None) if b < HORIZON else None
-        out.append(NodeWindow(node, s, b, before, after))
+        if s < b:
+            out.append(NodeWindow(node, s, b, before, after))
     if not out:
         out.append(NodeWindow(node, 0, 0, next((r for bs, be, r in busy if bs <= start < be), None)))
     return out
@@ -191,6 +194,7 @@ def _best_window(
     quota = snap.quota(cluster.name)
     cores = k * cluster.cores_per_node
     best: Optional[Window] = None
+    best_room = 0
     for s in sorted({w.start for w in wins if w.start and w.start >= not_before}):
         free = sorted((w for w in wins if w.start and w.start <= s < w.until), key=lambda w: -w.until)
         if len(free) < k:
@@ -201,8 +205,8 @@ def _best_window(
         opt: Optional[EndOption] = opts[0] if prefer == "short" else opts[-1]
         end, why = opt.end, opt.limited_by
         if free[k - 1].until < end:
-            # a later reservation cuts the window short: keep the same margin before it
-            end, why = free[k - 1].until - margin, "next"
+            # a later reservation cuts the window short (OAR's gap before it is inside until)
+            end, why = free[k - 1].until, "next"
         if until is not None and until < end:
             end, why = until, "asked"
         if duration is not None and s + duration < end:
@@ -215,12 +219,15 @@ def _best_window(
         v = policy.judge_window(now, s, end, cores=cores, quota=quota, cluster=cluster.name)
         if not v.ok:
             continue
-        fit = sorted((w for w in free if w.until >= end), key=_node_rank)[:k]
-        cand = Window(s, end, [w.node for w in fit], opt, v, why)
+        fit = sorted((w for w in free if w.until >= end), key=_node_rank)
+        room = len(fit)  # nodes free for the whole window
+        cand = Window(s, end, [w.node for w in fit[:k]], opt, v, why)
         if duration is not None and cand.duration >= duration - 60:
             return cand  # the earliest window of the length asked for
-        if best is None or cand.duration > best.duration + 60:
-            best = cand
+        # the longest window wins; within two minutes of it, the one with more nodes (a stretch
+        # opening just after a job is as good as the slot itself); otherwise the earliest
+        if best is None or cand.duration > best.duration + 120 or (cand.duration >= best.duration - 120 and room > best_room):
+            best, best_room = cand, room
     return best
 
 
@@ -287,13 +294,18 @@ def estimate_start(node: Node, now: int, walltime: int, my_queue: str) -> int:
         # starts as soon as the node is idle, whatever comes later (it is then evicted)
         for s, e, _ in _queue_blockers(node, now, my_queue):
             if s <= t < e:
-                t = e
+                t = _minute(e)
         return t
     for s, e, _ in _queue_blockers(node, now, my_queue):
         if s >= t + walltime:
             break
-        t = max(t, e)
+        t = max(t, _minute(e))
     return t
+
+
+def _minute(t: int) -> int:
+    """An estimate to the nearest minute (the ends of busy intervals carry OAR's gap of 61 s)."""
+    return (t + 30) // 60 * 60
 
 
 def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltime: int, *, besteffort: bool = False,

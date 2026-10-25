@@ -113,7 +113,7 @@ class Reserve(unittest.TestCase):
         o = offer(snap, "dahu", "now")
         self.assertEqual((o.count, o.best.end), (1, T(MON, 18, 55)))  # dahu-6 is free all afternoon
         w = avail.window_for(snap, o, 3, M)
-        self.assertEqual((w.end, w.limited_by), (T(MON, 15, 55), "next"))
+        self.assertEqual((w.end, w.limited_by), (T(MON, 15, 58), "next"))  # 15:58:59 is the last second OAR allows
         o = offer(snap, "dahu", "tonight")
         self.assertEqual((o.count, o.best.start), (1, T(MON, 19)))
 
@@ -122,7 +122,7 @@ class Reserve(unittest.TestCase):
         running = resv("bob", T(MON, 9), T(MON, 15), now=now)
         snap = snapshot(now, [cluster("yeti", 2, busy={1: [running], 2: [running]})])
         o = offer(snap, "yeti", "now")
-        self.assertEqual((o.best.start, o.best.end, o.count), (T(MON, 15), T(MON, 18, 55), 2))
+        self.assertEqual((o.best.start, o.best.end, o.count), (T(MON, 15, 2), T(MON, 18, 55), 2))  # OAR's gap, then a whole minute
         self.assertEqual(o.windows[0].blocker.user, "bob")
 
     def test_dead_nodes_and_full_cluster(self):
@@ -144,7 +144,40 @@ class Reserve(unittest.TestCase):
         maint = resv("admin", T(MON, 22), T(TUE, 2), queue="admin", types=("maintenance", "placeholder=maintenance"), now=now)
         snap = snapshot(now, [cluster("yeti", 1, busy={1: [maint]})])
         o = offer(snap, "yeti", "tonight")
-        self.assertEqual((o.best.start, o.best.end), (T(TUE, 2), T(TUE, 8, 55)))
+        self.assertEqual((o.best.start, o.best.end), (T(TUE, 2, 2), T(TUE, 8, 55)))
+
+    def test_busy_intervals_carry_oar_gap(self):
+        now = T(MON, 13, 10)
+        r = resv("bob", T(TUE, 9), T(TUE, 12), now=now)
+        node = cluster("yeti", 1, busy={1: [r]}).nodes[0]
+        self.assertEqual(node.busy(now)[0][:2], (T(TUE, 9) - 61, T(TUE, 12) + 61))
+        self.assertEqual(node.free_from(now)[0], (now, T(TUE, 9) - 61))
+
+    def test_oar_gap_after_a_job_ending_on_the_hour(self):
+        # 2026-10-25, grenoble: admin jobs held every yeti node until Mon 19:00:00 and OAR answered
+        # "could run at 19:01:01" to a reservation at 19:00 (60 s of security time, plus the second
+        # its timeline counts). The night window must open on the next whole minute, with every node.
+        now = T(MON, 13, 10)
+        admin = resv("staff", T(MON, 9), T(MON, 19), queue="admin", types=("deploy", "exotic"), now=now)
+        snap = snapshot(now, [cluster("yeti", 4, busy={1: [admin], 2: [admin], 4: [admin]}, dead=(3,))])
+        o = offer(snap, "yeti", "tonight")
+        self.assertEqual((o.best.start, o.best.end, o.count, o.best.limited_by), (T(MON, 19, 2), T(TUE, 8, 55), 3, "period"))
+        self.assertEqual([w.blocker.user for w in o.windows if w.blocker], ["staff"] * 3)
+        self.assertEqual(avail.window_for(snap, o, 3, M).start, T(MON, 19, 2))
+        # one node free all day: 19:02 with three nodes beats 19:00 with one
+        snap = snapshot(now, [cluster("yeti", 4, busy={1: [admin], 2: [admin]}, dead=(3,))])
+        o = offer(snap, "yeti", "tonight")
+        self.assertEqual((o.best.start, o.count), (T(MON, 19, 2), 3))
+
+    def test_oar_gap_before_the_next_job(self):
+        now = T(MON, 13, 10)
+        nxt = resv("bob", T(TUE, 8, 30), T(TUE, 12), now=now)
+        snap = snapshot(now, [cluster("yeti", 1, busy={1: [nxt]})])
+        o = offer(snap, "yeti", "tonight")
+        self.assertEqual((o.best.end, o.best.limited_by), (T(TUE, 8, 28), "next"))  # 08:28:59 is the last second allowed
+        nxt = resv("bob", T(TUE, 9), T(TUE, 12), now=now)  # at 09:00 sharp the policy's margin rules
+        snap = snapshot(now, [cluster("yeti", 1, busy={1: [nxt]})])
+        self.assertEqual(offer(snap, "yeti", "tonight").best.end, T(TUE, 8, 55))
 
 
 class Queue(unittest.TestCase):
@@ -167,14 +200,14 @@ class Queue(unittest.TestCase):
         snap = platform(now, grdix={"busy": {1: [running, p1_waiting], 2: [running, p4_waiting], 3: [be]}})
         o = offer(snap, "grdix", "now")
         est = {n.name: t for t, n in o.est}
-        self.assertEqual(est, {"grdix-1": T(MON, 20), "grdix-2": T(MON, 16), "grdix-3": now})
+        self.assertEqual(est, {"grdix-1": T(MON, 20, 1), "grdix-2": T(MON, 16, 1), "grdix-3": now})  # OAR's gap, to the minute
         self.assertEqual(o.ahead, 1)
 
     def test_besteffort_only_cluster(self):
         now = T(MON, 13, 10)
         holder = resv("bob", T(MON, 9), T(MON, 18), queue="p1", kind="B", now=now)
         o = offer(platform(now, roazhon15={"busy": {1: [holder]}}), "roazhon15", "now")
-        self.assertEqual((o.mode, o.queue, o.est[0][0]), ("besteffort", "besteffort", T(MON, 18)))
+        self.assertEqual((o.mode, o.queue, o.est[0][0]), ("besteffort", "besteffort", T(MON, 18, 1)))
         self.assertEqual(offer(platform(now, level="bronze"), "roazhon15", "now").blocked[:11], "best-effort")
 
     def test_no_access(self):

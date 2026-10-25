@@ -120,7 +120,7 @@ def _why_no_window(offer: Offer, k: int, now: int) -> str:
     if not c.usable_nodes:
         return f"{c.name}: no usable node (all dead or suspected)"
     if free == 0:
-        soonest = min((b.end for n in c.usable_nodes for _s, _e, b in n.busy(now)[:1]), default=None)
+        soonest = min((-(-e // 60) * 60 for n in c.usable_nodes for _s, e, _b in n.busy(now)[:1]), default=None)
         return f"{c.name}: no node is free in that slot" + (f" (the first one frees up {fmt_when(soonest, now)})" if soonest else "")
     if free < k:
         return f"{c.name}: only {free} node{'s' if free > 1 else ''} free in that slot, {k} asked"

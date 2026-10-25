@@ -61,7 +61,8 @@ class Reservations(unittest.TestCase):
         busy = resv("bob", T(MON, 9), T(MON, 19), now=now)
         snap = platform(now, yeti={"busy": {i: [busy] for i in range(1, 5)}})
         pl = book(snap, "yeti")
-        self.assertEqual((pl.items[0].request.start, pl.items[0].request.end), (T(MON, 19), T(TUE, 8, 55)))
+        # bob's jobs end at 19:00:00 sharp: OAR's gap, then the next whole minute
+        self.assertEqual((pl.items[0].request.start, pl.items[0].request.end), (T(MON, 19, 2), T(TUE, 8, 55)))
 
     def test_max_means_free_for_the_whole_window(self):
         now = T(MON, 13, 10)
@@ -224,13 +225,13 @@ class Duration(unittest.TestCase):
         snap = platform(now, yeti={"busy": {1: [a], 2: [b], 3: [gone], 4: [gone]}})
         # without a duration: the longest window, on yeti-2
         r = book(snap, "yeti", When(slot="now")).items[0].request
-        self.assertEqual((r.start, r.end), (T(MON, 15), T(MON, 18, 55)))
+        self.assertEqual((r.start, r.end), (T(MON, 15, 2), T(MON, 18, 55)))  # ann's job ends at 15:00:00: OAR's gap
         # two hours: yeti-1 can do that right away
         r = book(snap, "yeti", When(slot="now", duration=2 * H)).items[0].request
         self.assertEqual((r.start, r.walltime), (T(MON, 13, 11), 2 * H))
         # three and a half hours: only yeti-2 can, from 15:00
         r = book(snap, "yeti", When(slot="now", duration=3 * H + 1800)).items[0].request
-        self.assertEqual((r.start, r.walltime), (T(MON, 15), 3 * H + 1800))
+        self.assertEqual((r.start, r.walltime), (T(MON, 15, 2), 3 * H + 1800))
         # five hours: nobody can; refused, with what is possible
         pl = book(snap, "yeti", When(slot="now", duration=5 * H))
         self.assertFalse(pl.items)
