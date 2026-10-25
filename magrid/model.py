@@ -10,6 +10,12 @@ from .policy import Level, Quota
 
 ACTIVE_STATES = ("waiting", "launching", "running", "hold", "tolaunch", "toackreservation", "finishing", "resuming", "suspended")
 HORIZON = 10**11  # "forever", as a timestamp
+# OAR leaves SCHEDULER_JOB_SECURITY_TIME (60 s on Grid'5000) between two jobs on
+# the same resource, and its timeline counts whole seconds inclusively: a job
+# ending at 19:00:00 frees the node at 19:01:01 ("This reservation could run at
+# 2026-10-26 19:01:01", grenoble, 2026-10-25), and a job must end 61 s before
+# the next one starts. Every busy interval is widened by this on both sides.
+OAR_GAP = 61
 
 
 @dataclass
@@ -124,9 +130,10 @@ class Node:
         return int(m.group(1)) if m else 0
 
     def busy(self, now: int, *, soft: bool = True, besteffort: bool = False, skip_job: int = 0) -> list[tuple[int, int, Resv]]:
-        """Busy intervals from now on, sorted. Predicted slots of queued batch
-        jobs are included when soft is True; best-effort jobs, which any regular
-        job evicts, only when besteffort is True."""
+        """Busy intervals from now on, sorted, each widened by OAR_GAP on both
+        sides (what OAR needs between two jobs on a resource). Predicted slots of
+        queued batch jobs are included when soft is True; best-effort jobs, which
+        any regular job evicts, only when besteffort is True."""
         out = []
         for r in self.resvs:
             if r.job_id == skip_job or not r.start:
@@ -135,9 +142,9 @@ class Node:
                 continue
             if not r.firm and not soft:
                 continue
-            end = max(r.end, now + 60) if r.running else r.end
+            end = (max(r.end, now + 60) if r.running else r.end) + OAR_GAP
             if end > now:
-                out.append((max(r.start, now) if r.running else r.start, end, r))
+                out.append((max(r.start, now) if r.running else r.start - OAR_GAP, end, r))
         out.sort(key=lambda t: (t[0], t[1]))
         return out
 
