@@ -12,9 +12,10 @@ job.
 
 from __future__ import annotations
 
+import copy
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from . import cal, policy
 from .model import HORIZON, Cluster, Node, Resv, Snapshot
@@ -97,6 +98,7 @@ class NodeWindow:
     until: int  # end of that free stretch (HORIZON if open)
     blocker: Optional[Resv] = None  # what holds it at the slot start
     next: Optional[Resv] = None  # what comes after the free stretch
+    avoided: bool = False  # on the user's avoid list: never offered, shown as such
 
 
 @dataclass
@@ -231,16 +233,23 @@ def _best_window(
     return best
 
 
-def reserve_offer(snap: Snapshot, cluster: Cluster, slot: Slot, margin: int, now: Optional[int] = None) -> Offer:
-    """An advance reservation on a default-queue cluster in a slot."""
+def reserve_offer(snap: Snapshot, cluster: Cluster, slot: Slot, margin: int, now: Optional[int] = None,
+                  avoid: Iterable[str] = ()) -> Offer:  # fmt: skip
+    """An advance reservation on a default-queue cluster in a slot. Nodes in
+    avoid are listed, but never offered."""
     now = snap.now if now is None else now
+    avoid = set(avoid)
     start = max(slot.start, -(-(now + LEAD) // 60) * 60) if slot.is_now else slot.start
     offer = Offer(cluster, slot, "reserve", now)
     # how far the slot may reach: its own period, or the next one when the policy lets a job cross
     opts = policy.end_options(now, start, margin=margin)
     limit = max([o.end for o in opts] + [slot.period.end])
     for n in cluster.nodes:
-        if n.usable:
+        if not n.usable:
+            continue
+        if n.name in avoid:
+            offer.windows.append(NodeWindow(n, 0, 0, avoided=True))
+        else:
             offer.windows += _stretches(n, now, start, limit)
     offer.best = _best_window(snap, cluster, now, offer.windows, 1, margin)
     if offer.best:
@@ -270,6 +279,20 @@ def max_nodes(snap: Snapshot, offer: Offer, margin: int) -> int:
     while k < len({w.node.name for w in offer.windows}) and window_for(snap, offer, k + 1, margin) is not None:
         k += 1
     return k
+
+
+def restricted(snap: Snapshot, offer: Offer, hosts: Iterable[str], margin: int, now: Optional[int] = None) -> Offer:
+    """A copy of an offer limited to named nodes: its window and its count are theirs."""
+    hosts = set(hosts)
+    now = offer.now if now is None else now
+    out = copy.copy(offer)
+    out.windows = [w for w in offer.windows if w.node.name in hosts]
+    out.est = [(t, n) for t, n in offer.est if n.name in hosts]
+    if offer.mode == "reserve":
+        out.best = _best_window(snap, offer.cluster, now, out.windows, 1, margin)
+        b = out.best
+        out.count = sum(1 for w in out.windows if b is not None and w.start and w.start <= b.start and w.until >= b.end)
+    return out
 
 
 # ----------------------------------------------------- queued jobs
@@ -309,9 +332,11 @@ def _minute(t: int) -> int:
 
 
 def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltime: int, *, besteffort: bool = False,
-                now: Optional[int] = None) -> Offer:  # fmt: skip
-    """A queued job: abaca priority queue, or best-effort."""
+                now: Optional[int] = None, avoid: Iterable[str] = ()) -> Offer:  # fmt: skip
+    """A queued job: abaca priority queue, or best-effort. Nodes in avoid are
+    listed, but never offered."""
     now = snap.now if now is None else now
+    avoid = set(avoid)
     offer = Offer(cluster, slot, "queue", now)
     lvl = snap.level or policy.level("bronze")
     if cluster.kind == "abaca" and not besteffort:
@@ -333,6 +358,8 @@ def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltim
             offer.blocked = f"best-effort jobs are not open to your level ({lvl.name})"
         offer.walltime = min(besteffort_walltime, policy.BESTEFFORT_MAX_WALLTIME)
         nodes = [n for n in cluster.nodes if n.usable and n.access != "none"]
+    avoided = [n for n in nodes if n.name in avoid]
+    nodes = [n for n in nodes if n.name not in avoid]
     offer.est = sorted(((estimate_start(n, now, offer.walltime, offer.queue), n) for n in nodes),
                        key=lambda t: (t[0], _node_rank(NodeWindow(t[1], 0, 0))))  # fmt: skip
     mine = QUEUE_PRIORITY.get(offer.queue, 0)
@@ -344,23 +371,25 @@ def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltim
     offer.ahead = len(ahead)
     offer.windows = [NodeWindow(n, t, HORIZON, next((r for bs, be, r in n.busy(now, besteffort=True) if bs <= now < be), None))
                      for t, n in offer.est]  # fmt: skip
+    offer.windows += [NodeWindow(n, 0, 0, avoided=True) for n in avoided]
     return offer
 
 
 def offer_for(snap: Snapshot, cluster: Cluster, slot: Slot, *, margin: int, besteffort_walltime: int,
-              besteffort: bool = False, now: Optional[int] = None) -> Offer:  # fmt: skip
+              besteffort: bool = False, now: Optional[int] = None, avoid: Iterable[str] = ()) -> Offer:  # fmt: skip
     if besteffort or cluster.kind == "abaca":
-        return queue_offer(snap, cluster, slot, besteffort_walltime, besteffort=besteffort, now=now)
-    return reserve_offer(snap, cluster, slot, margin, now)
+        return queue_offer(snap, cluster, slot, besteffort_walltime, besteffort=besteffort, now=now, avoid=avoid)
+    return reserve_offer(snap, cluster, slot, margin, now, avoid=avoid)
 
 
 def build_offers(snap: Snapshot, clusters: list[Cluster], all_slots: list[Slot], *, margin: int,
-                 besteffort_walltime: int) -> dict[tuple[str, str], Offer]:  # fmt: skip
+                 besteffort_walltime: int, avoid: Iterable[str] = ()) -> dict[tuple[str, str], Offer]:  # fmt: skip
     """Every cell of the board. A cluster whose jobs are queued has a single offer, under the first slot."""
     offers = {}
+    avoid = set(avoid)
     for c in clusters:
         for s in all_slots:
-            o = offer_for(snap, c, s, margin=margin, besteffort_walltime=besteffort_walltime)
+            o = offer_for(snap, c, s, margin=margin, besteffort_walltime=besteffort_walltime, avoid=avoid)
             offers[(c.name, s.key)] = o
             if o.mode != "reserve":
                 break
@@ -407,4 +436,4 @@ def day_of(ts: int) -> dt.date:
 
 
 __all__ = ["Slot", "Offer", "Window", "NodeWindow", "slots", "find_slot", "offer_for", "window_for", "max_nodes",
-           "estimate_start", "describe", "explain_window", "LEAD", "fmt_ts"]  # fmt: skip
+           "restricted", "estimate_start", "describe", "explain_window", "LEAD", "fmt_ts"]  # fmt: skip

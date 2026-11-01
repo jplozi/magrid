@@ -22,6 +22,12 @@ clusters = auto
 add =
 hide =
 
+# Nodes never to book: left out of the board's counts, and every job on their
+# cluster says "host not in (...)". The n key of the board (then x on a node),
+# "magrid avoid" and "magrid allow" write this line. A node named on purpose
+# (magrid book yeti-4) is taken all the same.
+avoid =
+
 # How to reach the frontend of a site. {site} is replaced by the site name:
 # an alias of your ssh configuration that goes through access.grid5000.fr
 # (README, "Reaching the frontends"). When magrid runs on a frontend, that
@@ -75,6 +81,7 @@ class Config:
     clusters: list[str] = field(default_factory=lambda: ["auto"])
     add: list[str] = field(default_factory=list)
     hide: list[str] = field(default_factory=list)
+    avoid: list[str] = field(default_factory=list)
     ssh: str = "{site}.g5k"
     gateway: str = ""
     margin: int = 300
@@ -103,6 +110,7 @@ def load(path: Path | None = None) -> Config:
         clusters=s.get("clusters", "auto").replace(",", " ").split() or ["auto"],
         add=s.get("add", "").replace(",", " ").split(),
         hide=s.get("hide", "").replace(",", " ").split(),
+        avoid=s.get("avoid", "").replace(",", " ").split(),
         ssh=s.get("ssh").strip(),
         gateway=s.get("gateway", "").strip(),
         margin=parse_duration(s.get("margin")),
@@ -130,7 +138,7 @@ def set_lines(values: dict[str, str], path: Path | None = None) -> Path:
         if hit:
             lines[hit[0]] = new
             continue
-        after = [i for i, ln in enumerate(lines) if re.match(r"^(clusters|add|hide)\s*[=:]", ln)]
+        after = [i for i, ln in enumerate(lines) if re.match(r"^(clusters|add|hide|avoid)\s*[=:]", ln)]
         anchor = after[-1] if after else next((i for i, ln in enumerate(lines) if ln.strip() == "[magrid]"), None)
         if anchor is None:
             lines += ["[magrid]", new]

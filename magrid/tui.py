@@ -48,6 +48,8 @@ HELP = """\
    c                 clear all choices
    a                 add a cluster to the board: type to search (arm, lyon, gpu, epyc, ...)
    x                 hide the focused cluster from the board (a brings it back)
+   n                 pick nodes by name in the focused cell: ↑↓ move, Space picks one,
+                     x avoids one for good (x again allows it), Enter or n back
    g                 timeline of the focused cluster, full height (g again to go back)
    j                 your jobs: d deletes one, x extends one
    s                 show only the current period for "now" (do not run on through 19:00 or 09:00)
@@ -126,6 +128,14 @@ class Picker:
     row: int = 0
 
 
+@dataclass
+class NodePick:
+    """The n key: a cursor over the nodes of the focused cell."""
+
+    key: tuple[str, str]
+    row: int = 0
+
+
 class Board:
     def __init__(self, app, stdscr, initial=None):
         self.app = app
@@ -135,6 +145,8 @@ class Board:
         self.row = 0
         self.col = 0
         self.picks: dict[tuple[str, str], int] = {}
+        self.named: dict[tuple[str, str], list[str]] = {}  # cells whose nodes were picked by name
+        self.node_pick: Optional[NodePick] = None
         self.pane = "detail"  # detail, gantt, jobs, help
         self.job_row = 0
         self.message = ""
@@ -189,7 +201,7 @@ class Board:
         self.width = max(60, w)
         self.slots = views.visible_slots(avail.slots(snap.now), self.width)
         self.offers = avail.build_offers(snap, self.clusters, self.slots, margin=cfg.margin,
-                                         besteffort_walltime=cfg.besteffort_walltime)  # fmt: skip
+                                         besteffort_walltime=cfg.besteffort_walltime, avoid=cfg.avoid)  # fmt: skip
         self.findings = self.app.findings()
         self.row = min(self.row, max(0, len(self.clusters) - 1))
         self.col = min(self.col, max(0, len(self.slots) - 1))
@@ -198,6 +210,14 @@ class Board:
             o = self.offers.get(key)
             if o is None or not o.bookable:
                 del self.picks[key]
+                self.named.pop(key, None)
+            elif key in self.named:
+                free = {w.node.name for w in o.windows if w.start}
+                names = [n for n in self.named[key] if n in free]
+                if names:
+                    self.named[key], self.picks[key] = names, len(names)
+                else:
+                    del self.picks[key], self.named[key]
             else:
                 self.picks[key] = min(self.picks[key], self.limit(o))
 
@@ -329,8 +349,12 @@ class Board:
         o = self.offers.get(key)
         if o is None or o.mode != "reserve" or o.best is None:
             return None
-        k = self.picks.get(key, 0) or 1
         prefer = "short" if self.short else None
+        names = self.named.get(key)
+        if names:
+            o = avail.restricted(self.snap, o, names, self.app.cfg.margin)
+            return avail.window_for(self.snap, o, len(names), self.app.cfg.margin, prefer=prefer) or o.best
+        k = self.picks.get(key, 0) or 1
         if k == 1 and prefer is None:
             return o.best
         return avail.window_for(self.snap, o, k, self.app.cfg.margin, prefer=prefer) or o.best
@@ -344,11 +368,92 @@ class Board:
             self.say(o.blocked or "nothing to book in this cell", WARN)
             return
         k = max(0, min(k, self.limit(o)))
+        self.named.pop(key, None)  # a count replaces nodes picked by name
         if k:
             self.picks[key] = k
         else:
             self.picks.pop(key, None)
         self.say("")
+
+    # ------------------------------------------------------ node picker
+
+    def pick_names(self, key) -> list[str]:
+        """The nodes the picker moves over, in the order the detail lists them."""
+        o = self.offers.get(key)
+        return [nw.node.name for nw in views.detail_nodes(o, stable=True)] if o is not None else []
+
+    def open_node_pick(self) -> None:
+        key = self.focus_key()
+        if key is None or not self.pick_names(key):
+            self.say("no node to pick in this cell", WARN)
+            return
+        self.node_pick = NodePick(key)
+        self.pane = "detail"
+        self.say("")
+
+    def node_pick_key(self, ch: int) -> None:
+        p = self.node_pick
+        names = self.pick_names(p.key)
+        if not names or p.key != self.focus_key():  # the cell went away
+            self.node_pick = None
+            return
+        p.row = min(p.row, len(names) - 1)
+        if ch in (27, curses.KEY_ENTER, 10, 13, ord("n"), ord("N")):
+            self.node_pick = None
+        elif ch in (curses.KEY_UP, ord("k")):
+            p.row = max(0, p.row - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            p.row = min(len(names) - 1, p.row + 1)
+        elif ch == ord(" "):
+            self.toggle_named(p.key, names[p.row])
+        elif ch in (ord("x"), ord("X")):
+            self.toggle_avoid(names[p.row])
+
+    def toggle_named(self, key, name: str) -> None:
+        """Pick a node by name in a cell, or unpick it."""
+        o = self.offers.get(key)
+        if o is None:
+            return
+        names = list(self.named.get(key, []))
+        if name in names:
+            names.remove(name)
+        else:
+            nw = next((w for w in o.windows if w.node.name == name and w.start), None)
+            if nw is None:
+                avoided = any(w.avoided for w in o.windows if w.node.name == name)
+                self.say(f"{name} is avoided (x allows it again)" if avoided else f"{name} is not free in this slot", WARN)
+                return
+            if o.blocked:
+                self.say(o.blocked, WARN)
+                return
+            names.append(name)
+            order = {n.name: i for i, n in enumerate(o.cluster.nodes)}
+            names.sort(key=lambda n: order.get(n, 0))
+        if names:
+            self.named[key], self.picks[key] = names, len(names)
+        else:
+            self.named.pop(key, None)
+            self.picks.pop(key, None)
+        self.say("")
+
+    def toggle_avoid(self, name: str) -> None:
+        """Put a node on the avoid list, or take it off; kept in the configuration."""
+        cfg = self.app.cfg
+        if name in cfg.avoid:
+            if self.app.read_only:
+                cfg.avoid = [a for a in cfg.avoid if a != name]
+            else:
+                self.app.allow_nodes([name])
+            self.say(f"{name} can be booked again", OKB)
+        else:
+            if self.app.read_only:
+                cfg.avoid = list(cfg.avoid) + [name]
+            else:
+                self.app.avoid_nodes([name])
+            for key in [k for k, v in self.named.items() if name in v]:
+                self.toggle_named(key, name)
+            self.say(f"{name} avoided from now on (x again allows it)", DIM)
+        self.recompute()
 
     # ----------------------------------------------------------- draw
 
@@ -393,7 +498,8 @@ class Board:
                     first = max(0, min(self.row - keep // 2, n - keep))
                     shown = self.clusters[first : first + keep]
                 for ln in views.board(snap, self.app.cfg, shown, self.slots, self.offers, self.width,
-                                      focus=focus, picks=self.picks, windows=windows, compact=compact):  # fmt: skip
+                                      focus=focus, picks=self.picks, windows=windows, compact=compact,
+                                      named=self.named):  # fmt: skip
                     self.screen.put(y, ln)
                     y += 1
                 if len(shown) < n:
@@ -417,9 +523,15 @@ class Board:
         key = self.focus_key()
         if self.pane != "gantt":
             k = self.picks.get(key, 0) or 1
-            gantt_room = min(len(c.nodes) + 4, max(0, room - 9))
+            picking = self.node_pick is not None and self.node_pick.key == key
+            gantt_room = 0 if picking else min(len(c.nodes) + 4, max(0, room - 9))
+            cursor = None
+            if picking:
+                names = self.pick_names(key)
+                cursor = names[min(self.node_pick.row, len(names) - 1)] if names else None
             detail = views.offer_detail(o, self.snap, self.app.cfg, self.names, self.width, k=k,
-                                        window=self.window(key), max_lines=max(4, room - gantt_room - 1))  # fmt: skip
+                                        window=self.window(key), max_lines=max(4, room - gantt_room - 1),
+                                        picked=self.named.get(key), cursor=cursor)  # fmt: skip
             for ln in detail:
                 self.screen.put(y, ln)
                 y += 1
@@ -474,6 +586,8 @@ class Board:
         left = Line().add(" ")
         if self.message:
             left.add(self.message, self.message_style)
+        elif self.node_pick is not None:
+            left.add("↑↓ move · Space picks the node · x avoids it for good (x again allows it) · Enter or n back", OKB)
         elif picked:
             left.add(f"{picked} node{'s' if picked > 1 else ''} chosen in {len(self.picks)} cell{'s' if len(self.picks) > 1 else ''}: Enter to review and book", OKB)
         else:
@@ -515,15 +629,10 @@ class Board:
                 return
             picks = {key: 1}
         app = self.app
-        by_key = {s.key: s for s in self.slots}
 
         def action():
             snap = app.snap
-            asks = []
-            for (cname, skey), k in picks.items():
-                slot = by_key[skey]
-                when = plan.When(slot=slot.key if not slot.is_now else "now", short=self.short)
-                asks.append((plan.Want(cname, k), when))
+            asks = self.asks(picks)
             pl = plan.make_plans(snap, app.cfg, asks)
             dry = app.read_only
             print()
@@ -540,8 +649,19 @@ class Board:
             if any(o.ok for o in outcomes):
                 verify.after(app, [o for o in outcomes if o.ok])
                 self.picks.clear()
+                self.named.clear()
 
         self.leave(action)
+
+    def asks(self, picks: dict[tuple[str, str], int]) -> list[tuple[plan.Want, plan.When]]:
+        """What the chosen cells ask for: a count per cell, or the nodes picked by name."""
+        by_key = {s.key: s for s in self.slots}
+        out = []
+        for (cname, skey), k in picks.items():
+            slot = by_key[skey]
+            when = plan.When(slot=slot.key if not slot.is_now else "now", short=self.short)
+            out.append((plan.Want(cname, k, list(self.named.get((cname, skey), []))), when))
+        return out
 
     def job_action(self, what: str) -> None:
         snap = self.snap
@@ -628,6 +748,7 @@ class Board:
         self.on_board = [c for c in self.on_board if c != name]
         for key in [k for k in self.picks if k[0] == name]:
             del self.picks[key]
+            self.named.pop(key, None)
         self.recompute()
         self.say(f"{name} hidden from the board (a brings it back)", DIM)
 
@@ -700,6 +821,9 @@ class Board:
         if ch == curses.KEY_RESIZE:
             self.recompute()
             return True
+        if self.node_pick is not None:
+            self.node_pick_key(ch)
+            return True
         if ch in (ord("?"),):
             self.pane = "detail" if self.pane == "help" else "help"
             return True
@@ -750,6 +874,9 @@ class Board:
             self.set_pick(ch - ord("0"))
         elif ch in (ord("c"), ord("C")):
             self.picks.clear()
+            self.named.clear()
+        elif ch in (ord("n"), ord("N")):
+            self.open_node_pick()
         elif ch in (ord("a"), ord("A")):
             self.picker = Picker()
             self.say("")

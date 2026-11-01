@@ -169,6 +169,22 @@ class Reserve(unittest.TestCase):
         o = offer(snap, "yeti", "tonight")
         self.assertEqual((o.best.start, o.count), (T(MON, 19, 2), 3))
 
+    def test_avoided_nodes_are_listed_but_never_offered(self):
+        now = T(MON, 13, 10)
+        snap = snapshot(now, [cluster("yeti", 3)])
+        slot = avail.find_slot(avail.slots(now), "tonight")
+        o = avail.reserve_offer(snap, snap.clusters["yeti"], slot, M, avoid=["yeti-2"])
+        self.assertEqual((o.count, [w.node.name for w in o.windows if w.avoided]), (2, ["yeti-2"]))
+        self.assertEqual(avail.max_nodes(snap, o, M), 2)
+        self.assertNotIn("yeti-2", [n.name for n in avail.window_for(snap, o, 2, M).nodes])
+        r = avail.restricted(snap, o, ["yeti-3"], M)  # one node by name
+        self.assertEqual((r.count, [n.name for n in r.best.nodes]), (1, ["yeti-3"]))
+        self.assertIsNone(avail.restricted(snap, o, ["yeti-2"], M).best)  # avoided: no window
+        # queued jobs: the node is not estimated either
+        q = avail.offer_for(platform(now), platform(now).clusters["grdix"], avail.slots(now)[0], margin=M,
+                            besteffort_walltime=48 * H, avoid=["grdix-1"])  # fmt: skip
+        self.assertEqual(([n.name for _, n in q.est], [w.node.name for w in q.windows if w.avoided]), (["grdix-2", "grdix-3"], ["grdix-1"]))
+
     def test_oar_gap_before_the_next_job(self):
         now = T(MON, 13, 10)
         nxt = resv("bob", T(TUE, 8, 30), T(TUE, 12), now=now)

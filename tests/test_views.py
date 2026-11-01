@@ -83,6 +83,28 @@ class OnTheRecording(unittest.TestCase):
         self.assertIn("\x1b[", "\n".join(term.ansi(ln, color=True) for ln in lines))
 
 
+class NamedNodes(unittest.TestCase):
+    """Nodes picked by name show in the cell; avoided nodes are listed as such."""
+
+    now = T(MON, 13, 10)
+
+    def test_cell_and_detail(self):
+        snap = platform(self.now)
+        slot = avail.find_slot(avail.slots(self.now), "tonight")
+        o = avail.offer_for(snap, snap.clusters["yeti"], slot, margin=300, besteffort_walltime=48 * H, avoid=["yeti-4"])
+        self.assertEqual(o.count, 3)
+        w = avail.window_for(snap, avail.restricted(snap, o, ["yeti-1"], 300), 1, 300)
+        c1, _ = views.offer_cell(o, snap, views.CELL_W - 1, pick=1, window=w, named=["yeti-1"])
+        self.assertEqual(term.ansi(c1, color=False), "yeti-1 × 13h55")
+        c1, _ = views.offer_cell(o, snap, views.CELL_W - 1, pick=2, window=w, named=["yeti-1", "yeti-2"])
+        self.assertEqual(term.ansi(c1, color=False), "2 named × 13h55")
+        text = [term.ansi(ln, color=False) for ln in views.offer_detail(o, snap, cfg(), {}, 100, picked=["yeti-1"], cursor="yeti-2")]
+        self.assertTrue(any("yeti-1 ✓" in t for t in text), text)
+        self.assertTrue(any(t.startswith(" ▸") and "yeti-2" in t for t in text), text)
+        self.assertTrue(any("yeti-4" in t and "avoided" in t for t in text), text)
+        self.assertEqual([nw.node.name for nw in views.detail_nodes(o, stable=True)], ["yeti-1", "yeti-2", "yeti-3", "yeti-4"])
+
+
 class Marker(unittest.TestCase):
     """The ●N of nodes you already hold stays visible in every kind of cell."""
 

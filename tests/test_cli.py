@@ -211,6 +211,32 @@ class CommandLine(Offline):
         self.assertEqual(self.front.commands, [])
         self.assertIn("would cross 19:00", " ".join(out.split()))
 
+    def test_avoid_and_allow(self):
+        from magrid import config
+
+        def config_text():
+            return config.config_path().read_text()
+
+        rc, out = self.run_cli("avoid", "yeti-4")
+        self.assertEqual(rc, 0)
+        self.assertIn("avoid = yeti-4", config_text())
+        rc, out = self.run_cli("book", "yeti:2", "--tonight", "-n")
+        self.assertEqual(rc, 0)
+        self.assertIn("host not in ('yeti-4.grenoble.grid5000.fr')", out)
+        self.assertIn("not yeti-4", out)
+        rc, out = self.run_cli("book", "yeti-4", "--tonight", "-n")  # named on purpose: taken
+        self.assertIn("host in ('yeti-4.grenoble.grid5000.fr')", out)
+        self.assertNotIn("not in", out)
+        rc, out = self.run_cli("allow", "yeti-4")
+        self.assertEqual(rc, 0)
+        self.assertIn("\navoid =\n", config_text())
+        rc, out = self.run_cli("book", "yeti:2", "--tonight", "-n", "--avoid", "yeti-4")  # one-off
+        self.assertIn("host not in ('yeti-4.grenoble.grid5000.fr')", out)
+        self.assertIn("\navoid =\n", config_text())  # not written
+        rc, out = self.run_cli("avoid", "yeti")  # a cluster, not a node
+        self.assertEqual(rc, 2)
+        self.assertIn("not a node name", out)
+
     def test_del_and_extend(self):
         rc, out = self.run_cli("del", "7000001")
         self.assertEqual((rc, self.front.commands), (0, [("lille", ["oardel", "7000001"])]))

@@ -31,6 +31,7 @@ class Request:
     walltime: int
     start: Optional[int] = None  # advance reservation; None: queued job
     hosts: list[str] = field(default_factory=list)  # restrict to these nodes (short names)
+    avoid: list[str] = field(default_factory=list)  # never these nodes (short names); moot when hosts are named
     command: str = ""
     name: str = ""
     verdict: Optional[Verdict] = None
@@ -48,9 +49,14 @@ class Request:
 
     def _where(self) -> str:
         if self.hosts:
-            names = ",".join(f"'{h}.{self.site}.grid5000.fr'" for h in self.hosts)
-            return f"host in ({names})"
-        return f"cluster='{self.cluster}'"
+            return f"host in ({self._names(self.hosts)})"
+        where = f"cluster='{self.cluster}'"
+        if self.avoid:
+            where += f" AND host not in ({self._names(self.avoid)})"
+        return where
+
+    def _names(self, hosts: list[str]) -> str:
+        return ",".join(f"'{h}.{self.site}.grid5000.fr'" for h in hosts)
 
     def argv(self) -> list[str]:
         a = ["oarsub", "-q", self.queue]

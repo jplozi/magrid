@@ -137,9 +137,16 @@ def _why_shorter(snap: Snapshot, c: Cluster, w: Window, asked_end: int, k: int, 
     return "no node is free that long"
 
 
+def _avoided(cfg: Config, c: Cluster, want: Want) -> list[str]:
+    """The nodes of this cluster on the avoid list, except those named on purpose."""
+    names = {n.name for n in c.nodes}
+    return [a for a in cfg.avoid if a in names and a not in want.hosts]
+
+
 def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now: int, split: bool,
              waiting: dict[str, int], plan: Plan) -> None:  # fmt: skip
     lvl = snap.level or policy.level("bronze")
+    avoid = _avoided(cfg, c, want)
     all_slots = avail.slots(now)
     if when.start is not None:
         candidates = [_custom_slot(when.start)]
@@ -152,16 +159,12 @@ def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, no
         candidates = all_slots  # as early as possible
     last_problem = ""
     for slot in candidates:
-        offer = avail.reserve_offer(snap, c, slot, cfg.margin, now)
+        offer = avail.reserve_offer(snap, c, slot, cfg.margin, now, avoid=avoid)
         if want.hosts:
             unknown = [h for h in want.hosts if h not in {n.name for n in c.nodes}]
             if unknown:
                 raise PlanError(f"unknown node: {', '.join(unknown)}")
-            offer.windows = [w for w in offer.windows if w.node.name in want.hosts]
-        if want.hosts and offer.best is not None:
-            offer.best = avail.window_for(snap, offer, 1, cfg.margin, now=now)
-            b = offer.best
-            offer.count = sum(1 for x in offer.windows if b and x.start and x.start <= b.start and x.until >= b.end)
+            offer = avail.restricted(snap, offer, want.hosts, cfg.margin, now)
         # "as many as possible": every node that is free for the whole of the best window
         k = want.count if want.count is not None else offer.count
         if k < 1:
@@ -212,8 +215,8 @@ def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, no
         for i in range(jobs):
             req = Request(
                 site=c.site, cluster=c.name, nodes=(1 if split else k), queue="default", types=types,
-                start=start, walltime=w.end - start, hosts=(per[i] if per else hosts), verdict=verdict,
-                notes=avail.explain_window(w, c, now) + extra_notes,
+                start=start, walltime=w.end - start, hosts=(per[i] if per else hosts), avoid=([] if hosts else avoid),
+                verdict=verdict, notes=avail.explain_window(w, c, now) + extra_notes,
             )  # fmt: skip
             plan.items.append(Planned(req, c, w, floating, cores=req.nodes * c.cores_per_node, offer=offer))
         if w.start - now >= 3600:
@@ -234,7 +237,8 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
             f"they start as soon as the scheduler lets them"
         )
     slot = avail.slots(now)[0]
-    offer = avail.queue_offer(snap, c, slot, cfg.besteffort_walltime, besteffort=besteffort, now=now)
+    avoid = _avoided(cfg, c, want)
+    offer = avail.queue_offer(snap, c, slot, cfg.besteffort_walltime, besteffort=besteffort, now=now, avoid=avoid)
     if offer.mode == "none" or offer.blocked:
         plan.problems.append(f"{c.name}: {offer.blocked}")
         return
@@ -272,7 +276,8 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
         v.add("queue", True, f"{offer.queue} queue: walltime {fmt_dur(walltime)} of at most {fmt_dur(offer.walltime)}")
         req = Request(
             site=c.site, cluster=c.name, nodes=(1 if split else k), queue=("besteffort" if kind == "besteffort" else "abaca"),
-            types=types, walltime=walltime, hosts=hosts, command=cfg.command, verdict=v, notes=notes, est_start=t,
+            types=types, walltime=walltime, hosts=hosts, avoid=([] if hosts else avoid), command=cfg.command, verdict=v,
+            notes=notes, est_start=t,
         )  # fmt: skip
         plan.items.append(Planned(req, c, None, False, cores=req.nodes * c.cores_per_node, offer=offer))
 

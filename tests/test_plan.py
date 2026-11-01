@@ -216,6 +216,23 @@ class ClockGuard(unittest.TestCase):
         self.assertIsNone(plan.finalize(it, snap, T(MON, 17, 0, 6)))
 
 
+class Avoid(unittest.TestCase):
+    def test_avoided_nodes_are_never_asked_for(self):
+        now = T(MON, 13, 10)
+        snap = platform(now)
+        r = book(snap, "yeti:2", When(slot="tonight"), cfg=cfg(avoid=["yeti-4", "dahu-1"])).items[0].request
+        self.assertEqual((r.avoid, r.nodes), (["yeti-4"], 2))  # only this cluster's nodes go in the clause
+        self.assertEqual(r.argv()[-1], "{cluster='yeti' AND host not in ('yeti-4.grenoble.grid5000.fr')}/nodes=2,walltime=13:55:00")
+        self.assertEqual(book(snap, "yeti:max", When(slot="tonight"), cfg=cfg(avoid=["yeti-4"])).items[0].request.nodes, 3)
+        # a node named on purpose is taken, and no clause is sent
+        r = book(snap, "yeti-4", When(slot="tonight"), cfg=cfg(avoid=["yeti-4"])).items[0].request
+        self.assertEqual((r.hosts, r.avoid), (["yeti-4"], []))
+        # a queued job carries the clause in -p
+        r = book(snap, "grdix:2", cfg=cfg(avoid=["grdix-3"])).items[0].request
+        self.assertEqual(r.avoid, ["grdix-3"])
+        self.assertIn("cluster='grdix' AND host not in ('grdix-3.nancy.grid5000.fr')", r.argv())
+
+
 class Duration(unittest.TestCase):
     def test_the_earliest_window_of_the_length_asked(self):
         now = T(MON, 13, 10)

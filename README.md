@@ -38,7 +38,10 @@ over several web pages and commands. magrid gathers it and applies the rules.
   `oarsub` command and asks for confirmation. After submission it reads back
   what OAR recorded, checks it again, and runs the official policy check on
   the new job. `--wait` defers a reservation that is still beyond the 48-hour
-  horizon and submits it when it becomes allowed.
+  horizon and submits it when it becomes allowed. Nodes can be named
+  (`yeti-1 yeti-2`) or kept out of every booking (`--avoid yeti-4`, or the
+  `avoid` line of the configuration); the request then says `host not in
+  (...)`.
 - **Occupancy.** Who holds each node, with full name and group, until when,
   and who comes next; a per-node timeline of each cluster.
 - **Own jobs.** The user's jobs on all sites, with a prediction of what the
@@ -200,6 +203,8 @@ magrid book yeti --from 14:00 --for 3h
 magrid book yeti:2 --weekend --wait    submit when the 48-hour horizon allows it
 magrid book grdix:2             two queued jobs on a production cluster
 magrid book yeti-2 -n           dry run: the command only
+magrid book yeti:2 --avoid yeti-4   any two yeti nodes but yeti-4
+magrid avoid yeti-4             never book yeti-4, until magrid allow yeti-4
 magrid who roazhon15            holders, groups, until when, who is next
 magrid gantt dahu               timeline of a cluster
 magrid jobs                     own jobs on every site
@@ -213,8 +218,9 @@ magrid rules, magrid doctor, magrid config
 
 In the interactive board: arrows move, `+` and `-` set the number of nodes
 in the focused cell, `m` takes all of them, Enter reviews the commands and
-books, `a` adds a cluster (searchable), `x` hides one, `g` shows the
-timeline, `j` the user's jobs, `?` the help.
+books, `a` adds a cluster (searchable), `x` hides one, `n` picks nodes by
+name in the focused cell (Space) or marks one as avoided for good (`x` on the
+node), `g` shows the timeline, `j` the user's jobs, `?` the help.
 
 A booking plan, as shown before confirmation:
 
@@ -239,8 +245,8 @@ allowed alternative:
 ### Configuration
 
 `magrid config` creates and prints `~/.config/magrid/config.ini`: the board
-(`auto`, or a list of clusters, plus clusters added and hidden), the ssh alias
-pattern, the margin before boundaries, the job types per queue (`deploy
+(`auto`, or a list of clusters, plus clusters added and hidden), the nodes to
+avoid, the ssh alias pattern, the margin before boundaries, the job types per queue (`deploy
 destructive` for the default queue; `exotic` is added where required), one
 job per node or per cluster, teammates' logins, and the terminal theme.
 

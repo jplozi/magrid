@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import re
 import os
 import sys
 import threading
@@ -170,6 +171,22 @@ class App:
         config.set_lines({"add": " ".join(add), "hide": " ".join(hide)}, self.cfg.path)
         return new
 
+    def avoid_nodes(self, names: list[str]) -> list[str]:
+        """Put nodes on the avoid list. Returns those that were not on it."""
+        new = [n for n in names if n not in self.cfg.avoid]
+        if new:
+            self.cfg.avoid = list(self.cfg.avoid) + new
+            config.set_lines({"avoid": " ".join(self.cfg.avoid)}, self.cfg.path)
+        return new
+
+    def allow_nodes(self, names: list[str]) -> list[str]:
+        """Take nodes off the avoid list. Returns those that were on it."""
+        gone = [n for n in names if n in self.cfg.avoid]
+        if gone:
+            self.cfg.avoid = [a for a in self.cfg.avoid if a not in gone]
+            config.set_lines({"avoid": " ".join(self.cfg.avoid)}, self.cfg.path)
+        return gone
+
     def off_board(self, names: list[str]) -> list[str]:
         """Hide clusters from the board. Returns those that were on it."""
         board = self.board() if not self.words else []
@@ -189,11 +206,28 @@ def _known_clusters(app: App) -> list[str]:
     return list(app.ref.clusters)
 
 
+def _node_names(known: set[str], words: list[str]) -> list[str]:
+    """Node names such as yeti-4, checked against the known clusters."""
+    out = []
+    for w in words:
+        for name in w.replace(",", " ").split():
+            name = name.strip().lower().split(".")[0]
+            base = re.sub(r"-\d+$", "", name)
+            if base == name:
+                raise SystemExit(f"magrid: {name} is not a node name (yeti-4, dahu-12, ...)")
+            if base not in known:
+                raise SystemExit(f"magrid: unknown cluster {base} in {name}")
+            if name not in out:
+                out.append(name)
+    return out
+
+
 # -------------------------------------------------------------------- board
 
 
 def build_offers(app: App, clusters, slots):
-    return avail.build_offers(app.snap, clusters, slots, margin=app.cfg.margin, besteffort_walltime=app.cfg.besteffort_walltime)
+    return avail.build_offers(app.snap, clusters, slots, margin=app.cfg.margin, besteffort_walltime=app.cfg.besteffort_walltime,
+                              avoid=app.cfg.avoid)  # fmt: skip
 
 
 def cmd_board(app: App, args) -> int:
@@ -285,6 +319,28 @@ def cmd_hide(app: App, args) -> int:
     else:
         app.out([line(" None of these was on your board; they will stay off it.", DIM)])
     _show_board(app)
+    return 0
+
+
+def cmd_avoid(app: App, args) -> int:
+    names = _node_names(set(_known_clusters(app)), args.nodes)
+    if app.replay is not None:
+        raise SystemExit("magrid: not with --replay")
+    new = app.avoid_nodes(names)
+    lines = [Line().add(" ✔ ", OKB).add("avoided: " + " ".join(new))] if new else [line(" Already avoided.", DIM)]
+    lines.append(line(" Avoided nodes: " + " ".join(app.cfg.avoid) + "   (magrid allow takes one off the list)", DIM))
+    app.out(lines)
+    return 0
+
+
+def cmd_allow(app: App, args) -> int:
+    names = _node_names(set(_known_clusters(app)), args.nodes)
+    if app.replay is not None:
+        raise SystemExit("magrid: not with --replay")
+    gone = app.allow_nodes(names)
+    lines = [Line().add(" ✔ ", OKB).add("allowed again: " + " ".join(gone))] if gone else [line(" None of these was avoided.", DIM)]
+    lines.append(line(" Avoided nodes: " + (" ".join(app.cfg.avoid) or "none"), DIM))
+    app.out(lines)
     return 0
 
 
@@ -491,6 +547,8 @@ def cmd_book(app: App, args) -> int:
         wants = [plan.parse_want(s, None, known) for s in args.specs]
     except plan.PlanError as e:
         raise SystemExit(f"magrid: {e}")
+    if args.avoid:  # for this booking only; the configuration's avoid line always applies
+        app.cfg.avoid = list(app.cfg.avoid) + [n for n in _node_names(known, args.avoid) if n not in app.cfg.avoid]
     clusters = []
     for w in wants:
         if w.cluster not in clusters:
@@ -744,6 +802,8 @@ examples:
   magrid board arm               the ARM clusters (also: lyon, gpu, x86, power, exotic, abaca, all)
   magrid clusters arm lyon       every cluster, filtered; ✓ marks those on your board
   magrid add hydra pyxis         put them on your board (magrid hide takes them off)
+  magrid book yeti:2 --avoid yeti-4   any two yeti nodes but yeti-4
+  magrid avoid yeti-4            never book yeti-4, until magrid allow yeti-4
   magrid gantt dahu              the timeline of a cluster
   magrid jobs                    your jobs on every site
   magrid extend 1234567 --max    extend a job as far as the rules allow
@@ -804,6 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-t", "--types", action="append", metavar="TYPES", help="job types instead of the configured ones (exotic is added as needed)")
     g.add_argument("--margin", metavar="DURATION", help="end this long before a boundary (default: from the configuration, 5m)")
     g.add_argument("--name", help="a name for the jobs (oarsub -n)")
+    g.add_argument("--avoid", action="append", metavar="NODES", help="never these nodes (yeti-4); the avoid line of the configuration always applies")
     g.add_argument("--wait", action="store_true", help="if it is too early to reserve (48 h rule), stay running and book the moment it opens")
     g.add_argument("-n", "--dry-run", action="store_true", help="show the commands, submit nothing")
     g.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
@@ -839,6 +900,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("hide", cmd_hide, "take clusters off your board")
     sp.add_argument("words", nargs="+", metavar="what", help="clusters, sites or groups")
+
+    sp = add("avoid", cmd_avoid, "never book these nodes (kept in the configuration)")
+    sp.add_argument("nodes", nargs="+", metavar="node", help="node names such as yeti-4")
+
+    sp = add("allow", cmd_allow, "book these nodes again")
+    sp.add_argument("nodes", nargs="+", metavar="node", help="node names such as yeti-4")
 
     add("check", cmd_check, "what the weekly usage policy check will say about you")
     add("rules", cmd_rules, "the rules magrid enforces")

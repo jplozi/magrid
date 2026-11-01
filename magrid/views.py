@@ -230,10 +230,12 @@ def _marked(variants: list[str], st: St, mark: str, width: int, bg: Optional[int
 
 
 def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False, pick: int = 0,
-               window: Optional[Window] = None, compact: bool = False) -> tuple[Line, Line]:  # fmt: skip
+               window: Optional[Window] = None, compact: bool = False,
+               named: Optional[list[str]] = None) -> tuple[Line, Line]:  # fmt: skip
     """The two lines of a board cell for a reservation offer. In a compact
     board only the first is shown, so it must carry what matters: why the slot
-    cannot be booked, and how many nodes you already hold there (●2)."""
+    cannot be booked, and how many nodes you already hold there (●2). named:
+    nodes chosen by name in this cell, shown instead of a count."""
     now = snap.now
     bg = BG_SELECT if focus else None
     fill = St(bg=bg)
@@ -258,12 +260,17 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
     usual = w.limited_by == "period" and w.start <= offer.slot.start + 120
     if offer.blocked:
         st1 = DIM
-    elif pick:
+    elif pick or named:
         st1 = St(WHITE, bold=True)
     else:
         st1 = OKB if usual else WARNB
     dur = fmt_dur(w.duration)
-    heads = [f"{k} of {count} {TIMES} {dur}", f"{k}/{count} {TIMES} {dur}"] if pick else [f"{count} {TIMES} {dur}"]
+    if named:
+        heads = [f"{' '.join(named)} {TIMES} {dur}", f"{len(named)} named {TIMES} {dur}", f"{len(named)} named"]
+    elif pick:
+        heads = [f"{k} of {count} {TIMES} {dur}", f"{k}/{count} {TIMES} {dur}"]
+    else:
+        heads = [f"{count} {TIMES} {dur}"]
     l1 = _marked(heads, st1, mark, width, bg)
     if offer.blocked:
         l2 = Line().add(next((r for r in reason if len(r) <= width), reason[-1]), reason_st.on(bg))
@@ -341,12 +348,14 @@ def board(
     picks: Optional[dict[tuple[str, str], int]] = None,
     windows: Optional[dict[tuple[str, str], Window]] = None,
     compact: bool = False,
+    named: Optional[dict[tuple[str, str], list[str]]] = None,
 ) -> list[Line]:
     """The table: one row per cluster, one column per slot. compact keeps one
-    line per cluster, for short terminals."""
+    line per cluster, for short terminals. named: nodes chosen by name per cell."""
     now = snap.now
     picks = picks or {}
     windows = windows or {}
+    named = named or {}
     out = []
     h1, h2 = Line().add(" " * NAME_W), Line().add(" " * NAME_W)
     for s in slots:
@@ -376,7 +385,7 @@ def board(
                     a, b = cell("", CELL_W - 1), cell("", CELL_W - 1)
                 else:
                     a, b = offer_cell(o, snap, CELL_W - 1, focus=f, pick=picks.get(key, 0), window=windows.get(key),
-                                      compact=compact)
+                                      compact=compact, named=named.get(key))
                 r1.add(" ").add(" ", fb).extend_line(a)
                 r2.add(" ").add(" ", fb).extend_line(b)
         out += [r1] if compact else [Line(), r1, r2]
@@ -574,6 +583,7 @@ def gantt_row(node: Node, snap: Snapshot, team: set[str], t0: int, step: int, co
 
 
 FAINT_FG = 238
+AVOID_MARK = "⊘"  # a node on the avoid list
 
 
 def _state_mark(node: Node) -> tuple[str, St]:
@@ -614,9 +624,10 @@ def gantt(snap: Snapshot, cfg: Config, c: Cluster, width: int, *, start: Optiona
     if max_rows and len(nodes) > max_rows:
         hidden = len(nodes) - max_rows
         nodes = nodes[:max_rows]
+    avoid = set(cfg.avoid)
     for n in nodes:
-        mark, st = _state_mark(n)
-        ln = Line().add(" ").add(mark, st).add(" ").extend_line(cell(n.name, label_w - 3, PLAIN if n.usable else DIM))
+        mark, st = (AVOID_MARK, DIM) if n.name in avoid else _state_mark(n)
+        ln = Line().add(" ").add(mark, st).add(" ").extend_line(cell(n.name, label_w - 3, PLAIN if n.usable and n.name not in avoid else DIM))
         ln.extend_line(gantt_row(n, snap, team, t0, step, cols, plain, daytime=(c.kind == "default")))
         out.append(ln)
     if hidden:
@@ -662,6 +673,8 @@ def who(snap: Snapshot, cfg: Config, nodes: list[Node], names: dict[str, str], w
             head.add("  free", OKB).add(f" until {fmt_when(nxt.start, now)}" if nxt else " with nothing planned", OK)
             if n.hard != "alive":
                 head.add(f"  ({n.hard})", DIM)
+        if n.name in cfg.avoid:
+            head.add("  avoided", DIM)
         out.append(head.clip(width))
         for r in current + later:
             out.append(_who_line(r, snap, team, names, now, r in current).clip(width))
@@ -729,6 +742,8 @@ def plan_view(pl: Plan, now: int, width: int, *, dry: bool = False) -> list[Line
             head.add("   " + ", ".join(r.hosts), MINE)
         elif it.window and it.window.nodes:
             head.add("   likely " + ", ".join(n.name for n in it.window.nodes[: r.nodes]), DIM)
+        if r.avoid:
+            head.add("   not " + ", ".join(r.avoid), DIM)
         out.append(head.clip(width))
         if r.is_reservation:
             what = Line().add("   ").add(fmt_range(r.start, r.end), St(SKY, bold=True))
@@ -759,9 +774,32 @@ def plan_view(pl: Plan, now: int, width: int, *, dry: bool = False) -> list[Line
 # ------------------------------------------------------------------ detail
 
 
+def detail_nodes(offer: Offer, window: Optional[Window] = None, *, stable: bool = False) -> list[NodeWindow]:
+    """The nodes of a cell as the detail lists them, one entry per node: those
+    that fit the window first, then by when they free up; stable: by number,
+    so that a cursor can move over them while the board refreshes."""
+    w0 = (window or offer.best) if offer.mode == "reserve" else None
+
+    def order(nw):
+        if stable:
+            return (nw.node.number,)
+        fits = bool(w0 and nw.start and nw.start <= w0.start and nw.until >= w0.end)
+        return (0 if fits else 1 if nw.start else 2, nw.start or 0, nw.node.number)
+
+    out, seen = [], set()
+    for nw in sorted(offer.windows, key=order):
+        if nw.node.name not in seen:
+            seen.add(nw.node.name)
+            out.append(nw)
+    return out
+
+
 def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str], width: int, k: int = 1,
-                 window: Optional[Window] = None, max_lines: int = 0) -> list[Line]:  # fmt: skip
-    """What stands behind a board cell: the exact window, the rules checked, the nodes."""
+                 window: Optional[Window] = None, max_lines: int = 0, picked: Optional[list[str]] = None,
+                 cursor: Optional[str] = None) -> list[Line]:  # fmt: skip
+    """What stands behind a board cell: the exact window, the rules checked, the
+    nodes. picked: nodes chosen by name (marked); cursor: the node under the
+    picker's cursor (the list is then in node order)."""
     now = snap.now
     c = offer.cluster
     out = []
@@ -787,21 +825,16 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
             out.append(Line().add("   ").extend_line(a))
     team = set(cfg.team)
     rows = []
-    seen = set()
-    w0 = (window or offer.best) if offer.mode == "reserve" else None
-
-    def order(nw):  # the nodes that fit the window first, then by when they free up
-        fits = bool(w0 and nw.start and nw.start <= w0.start and nw.until >= w0.end)
-        return (0 if fits else 1 if nw.start else 2, nw.start or 0, nw.node.number)
-
-    for nw in sorted(offer.windows, key=order):
+    picked = picked or []
+    for nw in detail_nodes(offer, window, stable=cursor is not None):
         n = nw.node
-        if n.name in seen:
-            continue
-        seen.add(n.name)
-        mark, st = _state_mark(n)
-        ln = Line().add("   ").add(mark, st).add(" ").extend_line(cell(n.name, 15))
-        if offer.mode == "reserve":
+        mark, st = (AVOID_MARK, DIM) if nw.avoided else _state_mark(n)
+        chosen = n.name in picked
+        ln = Line().add(" ▸ " if cursor == n.name else "   ", OKB).add(mark, st).add(" ")
+        ln.extend_line(cell(n.name + (" ✓" if chosen else ""), 15, St(WHITE, bold=True) if chosen else PLAIN))
+        if nw.avoided:
+            ln.add("avoided", DIM)
+        elif offer.mode == "reserve":
             if nw.start:
                 until = f"until {fmt_when(nw.until, now)}" if nw.until < 10**10 else "onwards"
                 ln.add(f"free {fmt_when(nw.start, now)} {until}" if nw.start > offer.slot.start + 60 else f"free {until}", OK)

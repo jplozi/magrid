@@ -22,6 +22,14 @@ def request(**kw):
 
 
 class Commands(unittest.TestCase):
+    def test_avoided_nodes(self):
+        r = request(avoid=["yeti-4"])
+        self.assertEqual(r.argv()[-1], "{cluster='yeti' AND host not in ('yeti-4.grenoble.grid5000.fr')}/nodes=1,walltime=1:00:00")
+        r = request(hosts=["yeti-1"], avoid=["yeti-4"])  # a node named on purpose: the avoid list is moot
+        self.assertEqual(r.argv()[-1], "{host in ('yeti-1.grenoble.grid5000.fr')}/nodes=1,walltime=1:00:00")
+        r = request(start=None, avoid=["yeti-2", "yeti-4"])  # a queued job: the clause goes to -p
+        self.assertIn("cluster='yeti' AND host not in ('yeti-2.grenoble.grid5000.fr','yeti-4.grenoble.grid5000.fr')", r.argv())
+
     def test_types(self):
         self.assertEqual(oar.job_types(cluster("yeti", 1, exotic=True), ["deploy", "destructive"]), ["deploy", "exotic", "destructive"])
         self.assertEqual(oar.job_types(cluster("dahu", 1), ["deploy", "exotic"]), ["deploy"])
