@@ -42,7 +42,7 @@ class FetchError(RuntimeError):
     pass
 
 
-# ---------------------------------------------------------------- reference
+# Reference
 
 
 @dataclass
@@ -204,7 +204,7 @@ def load_reference(remote: Remote, cfg: Config, *, refresh: bool = False, need: 
     return fetch_reference(remote, cfg)
 
 
-# ------------------------------------------------------------------ history
+# History
 
 
 @dataclass
@@ -286,7 +286,7 @@ def cached_history(ref: Reference) -> tuple[Optional[History], bool]:
 
 
 def load_history(remote: Remote, cfg: Config, ref: Reference, *, refresh: bool = False) -> History:
-    """Which clusters the user has used recently; read once a day."""
+    """Which clusters the user has used recently, read once a day."""
     path = _history_path()
     old, stale = cached_history(ref)
     if not refresh and old is not None and not stale:
@@ -313,7 +313,7 @@ def load_history(remote: Remote, cfg: Config, ref: Reference, *, refresh: bool =
     return h
 
 
-# -------------------------------------------------------------------- state
+# State
 
 
 def _split_node(fqdn: str) -> tuple[str, str]:
@@ -337,7 +337,7 @@ def _extensions(events: list[dict]) -> list[tuple[int, int]]:
 
 
 STATUS = "sites/$s/status?disks=no&vlans=no&subnets=no"
-QUOTA_TIMEOUT = 20  # seconds; usagepolicycheck takes under a second, but waits 40 s on a site whose database is down
+QUOTA_TIMEOUT = 20  # seconds. usagepolicycheck takes under a second, but waits 40 s on a site whose database is down
 
 
 def state_script(status_sites: list[str], job_sites: list[str], quota_sites: list[str], *, job_nodes: bool = True) -> str:
@@ -393,7 +393,7 @@ class Progress:
             return sorted(s for s in self.expected if f"status_{s}" not in self.files and f"status_{s}.fail" not in self.files)
 
     def snapshot(self, ref: "Reference", clusters: list[str], previous: Optional[Snapshot] = None) -> Optional[Snapshot]:
-        """A snapshot of what has arrived; the clusters of pending sites are marked as being read."""
+        """A snapshot of what has arrived. The clusters of pending sites are marked as being read."""
         pending = set(self.pending())
         values, files = self.copy()
         if "now" not in values:
@@ -461,7 +461,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             except ValueError:
                 snap.problems.append(f"{name[7:]}: unreadable status")
 
-    # every cluster of the sites we have a status for is built; `want` only orders them
+    # every cluster of the sites we have a status for is built. `want` only orders them
     names = list(want) + sorted(c for c, d in ref.clusters.items() if d["site"] in status and c not in want)
     for cname in names:
         d = ref.clusters.get(cname)
@@ -475,7 +475,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             old.state = "stale"
             snap.clusters[cname] = old
             if site not in pending and not any(p.startswith(f"{site}: ") for p in snap.problems):
-                snap.problems.append(f"{site}: the Grid'5000 API did not answer; showing what was read at {_clock(old.as_of)}")
+                snap.problems.append(f"{site}: the Grid'5000 API did not answer, showing what was read at {_clock(old.as_of)}")
             continue
         c = Cluster(
             name=cname, site=site, queues=tuple(d["queues"]), exotic=d["exotic"], cpu=d["cpu"], sockets=d["sockets"],
@@ -505,7 +505,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             c.state = "reading" if site in pending else "unread"
         snap.clusters[cname] = c
         if c.state == "unread" and not any(p.startswith(f"{site}: ") for p in snap.problems):
-            snap.problems.append(f"{site}: the Grid'5000 API did not answer; its clusters cannot be shown")
+            snap.problems.append(f"{site}: the Grid'5000 API did not answer: its clusters cannot be shown")
 
     # the user's jobs, with the nodes they hold
     for name, blob in sorted(files.items()):
@@ -548,7 +548,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             snap.flagged += flagged
         except (ValueError, KeyError, TypeError):
             where = f"{site}: " if site else ""
-            snap.problems.append(f"{where}usagepolicycheck gave no answer (in {QUOTA_TIMEOUT} s); your daytime use there today "
+            snap.problems.append(f"{where}usagepolicycheck gave no answer (in {QUOTA_TIMEOUT} s). Your daytime use there today "
                                  f"is counted from the jobs magrid can see")  # fmt: skip
     seen: Optional[dict] = None
     for cname, c in snap.clusters.items():
@@ -665,16 +665,16 @@ def fetch_state(remote: Remote, cfg: Config, ref: Reference, clusters: list[str]
     if quota:
         for s in quota_sites:
             if f"quota_{s}" not in files and not any(p.startswith(f"{s}: usagepolicycheck") for p in snap.problems):
-                snap.problems.append(f"{s}: usagepolicycheck gave no answer; your daytime use there today is counted "
+                snap.problems.append(f"{s}: usagepolicycheck gave no answer. Your daytime use there today is counted "
                                      f"from the jobs magrid can see")  # fmt: skip
     return snap
 
 
-# -------------------------------------------------------------------- names
+# Names
 
 
 def resolve_names(remote: Remote, cfg: Config, ref: Reference, logins: Iterable[str]) -> dict[str, str]:
-    """Full names for logins, from the users API; remembered locally."""
+    """Full names for logins, from the users API, remembered locally."""
     path = cache_dir() / "names.json"
     try:
         known = json.loads(path.read_text())

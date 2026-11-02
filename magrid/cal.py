@@ -6,7 +6,7 @@ working days, where the 09:00 and 19:00 boundaries fall, and how the timeline
 splits into "day" periods (09:00 to 19:00 on working days, where the daily
 quota applies) and "free" periods (nights, weekends, public holidays).
 
-Times are Unix timestamps (int seconds) everywhere; dates are Paris dates.
+Times are Unix timestamps (int seconds) everywhere, and dates are Paris dates.
 """
 
 from __future__ import annotations

@@ -181,7 +181,7 @@ class Finalize(unittest.TestCase):
         self.assertEqual((it.request.start, it.request.end), (T(MON, 13, 15), end))
 
     def test_the_rules_are_checked_at_the_second_of_submission(self):
-        # Planned at 16:59 until 18:55; confirmed after 17:00: still fine, same end.
+        # Planned at 16:59 until 18:55, confirmed after 17:00: still fine, same end.
         snap = platform(T(MON, 16, 59))
         it = book(snap, "yeti").items[0]
         self.assertEqual(it.request.end, T(MON, 18, 55))
@@ -249,7 +249,7 @@ class Duration(unittest.TestCase):
         # three and a half hours: only yeti-2 can, from 15:00
         r = book(snap, "yeti", When(slot="now", duration=3 * H + 1800)).items[0].request
         self.assertEqual((r.start, r.walltime), (T(MON, 15, 2), 3 * H + 1800))
-        # five hours: nobody can; refused, with what is possible
+        # five hours: nobody can, refused with what is possible
         pl = book(snap, "yeti", When(slot="now", duration=5 * H))
         self.assertFalse(pl.items)
         self.assertIn("--clip", pl.problems[0])

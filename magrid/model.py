@@ -27,7 +27,7 @@ class Resv:
     project: str
     queue: str
     state: str
-    start: int  # actual or predicted; 0 when OAR has no prediction
+    start: int  # actual or predicted, 0 when OAR has no prediction
     walltime: int
     submitted: int
     types: tuple[str, ...] = ()
@@ -111,7 +111,7 @@ class Node:
     comment: str = ""
     cores: int = 0
     nodeset: str = ""
-    max_walltime: int = 0  # abaca nodes only; 0: no limit
+    max_walltime: int = 0  # abaca nodes only, 0 for no limit
     access: str = ""  # abaca priority of the user on this node: p1..p4, besteffort, none
     resvs: list[Resv] = field(default_factory=list)
 
@@ -132,7 +132,7 @@ class Node:
     def busy(self, now: int, *, soft: bool = True, besteffort: bool = False, skip_job: int = 0) -> list[tuple[int, int, Resv]]:
         """Busy intervals from now on, sorted, each widened by OAR_GAP on both
         sides (what OAR needs between two jobs on a resource). Predicted slots of
-        queued batch jobs are included when soft is True; best-effort jobs, which
+        queued batch jobs are included when soft is True, and best-effort jobs, which
         any regular job evicts, only when besteffort is True."""
         out = []
         for r in self.resvs:
@@ -149,7 +149,7 @@ class Node:
         return out
 
     def free_from(self, now: int, **kw) -> list[tuple[int, int]]:
-        """Free intervals from now on, as (start, end); the last one is open-ended."""
+        """Free intervals from now on, as (start, end), the last one open-ended."""
         if not self.usable:
             return []
         free = []
@@ -179,7 +179,7 @@ class Cluster:
     threads_per_node: int = 0
     ram_gib: int = 0
     quota_cores: int = 0  # core count the daily quota is computed from
-    state: str = ""  # "": read now; "reading": not answered yet; "stale": shown as read at as_of; "unread": no data
+    state: str = ""  # "": read now, "reading": not answered yet, "stale": shown as read at as_of, "unread": no data
     as_of: int = 0
 
     @property

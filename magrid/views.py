@@ -22,7 +22,7 @@ ARROW = "→"
 TIMES = "×"
 
 
-# ------------------------------------------------------------------ header
+# Header
 
 
 def _local_note(now: int) -> str:
@@ -85,7 +85,7 @@ def alerts(snap: Snapshot, findings: list[audit.Finding], width: int) -> list[Li
     return out
 
 
-# -------------------------------------------------------------------- jobs
+# Jobs
 
 
 def _span(start: int, end: int, now: int) -> str:
@@ -146,7 +146,7 @@ def jobs_view(snap: Snapshot, findings: list[audit.Finding], width: int, title: 
     return out
 
 
-# ------------------------------------------------------------------- board
+# Board
 
 NAME_W = 28
 CELL_W = 16
@@ -254,7 +254,7 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
     if w is None:
         held = [x for x in offer.windows if x.blocker is not None]
         why = "all busy" if held else "no usable node"
-        return _marked(["–"], VDIM, mark, width, bg), cell(why, width, VDIM.on(bg))
+        return _marked(["-"], VDIM, mark, width, bg), cell(why, width, VDIM.on(bg))
     count = offer.count
     k = pick or 0
     usual = w.limited_by == "period" and w.start <= offer.slot.start + 120
@@ -320,13 +320,13 @@ def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         bits = []
         if offer.ahead:
             bits.append(f"{offer.ahead} queued ahead")
-        bits.append("no day or night rule; higher priorities go first")
+        bits.append("no day or night rule, higher priorities go first")
         l2.add(" · ".join(bits), DIM.on(bg))
     return l1.clip(width).pad(width, St(bg=bg)), l2.clip(width).pad(width, St(bg=bg))
 
 
 def visible_slots(all_slots: list[Slot], width: int) -> list[Slot]:
-    """As many slots as fit; the weekend and the first two always stay."""
+    """As many slots as fit, the weekend and the first two always stay."""
     room = max(3, (width - NAME_W) // (CELL_W + 1))
     if len(all_slots) <= room:
         return all_slots
@@ -410,7 +410,7 @@ def legend(width: int) -> list[Line]:
     return out
 
 
-# ------------------------------------------------------------------- gantt
+# Gantt
 
 PARTIAL = " ▏▎▍▌▋▊▉"  # left-aligned eighths
 
@@ -494,7 +494,7 @@ _PLAIN_FILL = {"free": " ", "busy": "█", "team": "█", "mine": "#", "mine_be"
 
 def _fill(kind: str, ts: int, plain: bool, daytime: bool = True) -> str:
     """The character of a full timeline cell. In colour the background says it
-    all; without colour the character has to."""
+    all. Without colour the character has to."""
     if plain:
         if kind == "free":
             return "·" if (daytime and cal.period_at(ts).is_day) else " "
@@ -650,7 +650,7 @@ def gantt_legend(plain: bool = False) -> list[Line]:
     return [ln]
 
 
-# --------------------------------------------------------------------- who
+# Who
 
 
 def who(snap: Snapshot, cfg: Config, nodes: list[Node], names: dict[str, str], width: int) -> list[Line]:
@@ -716,7 +716,7 @@ def _who_line(r: Resv, snap: Snapshot, team: set[str], names: dict[str, str], no
     return ln
 
 
-# -------------------------------------------------------------------- plan
+# Plan
 
 
 def verdict_lines(v: Optional[policy.Verdict], width: int, indent: str = "     ") -> list[Line]:
@@ -771,12 +771,12 @@ def plan_view(pl: Plan, now: int, width: int, *, dry: bool = False) -> list[Line
     return out
 
 
-# ------------------------------------------------------------------ detail
+# Detail
 
 
 def detail_nodes(offer: Offer, window: Optional[Window] = None, *, stable: bool = False) -> list[NodeWindow]:
     """The nodes of a cell as the detail lists them, one entry per node: those
-    that fit the window first, then by when they free up; stable: by number,
+    that fit the window first, then by when they free up. With stable, by number,
     so that a cursor can move over them while the board refreshes."""
     w0 = (window or offer.best) if offer.mode == "reserve" else None
 
@@ -798,7 +798,7 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
                  window: Optional[Window] = None, max_lines: int = 0, picked: Optional[list[str]] = None,
                  cursor: Optional[str] = None) -> list[Line]:  # fmt: skip
     """What stands behind a board cell: the exact window, the rules checked, the
-    nodes. picked: nodes chosen by name (marked); cursor: the node under the
+    nodes. picked: nodes chosen by name (marked). cursor: the node under the
     picker's cursor (the list is then in node order)."""
     now = snap.now
     c = offer.cluster
@@ -865,7 +865,7 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
     return out + rows
 
 
-# --------------------------------------------------------------- catalogue
+# Catalogue
 
 ACCESS_TEXT = {"default": "default", "p1": "abaca p1", "p2": "abaca p2", "p3": "abaca p3", "p4": "abaca p4",
                "besteffort": "best-effort", "none": "no access"}  # fmt: skip
@@ -905,7 +905,7 @@ def catalogue_line(name: str, d: dict, access: dict[str, str], *, on_board: bool
     return ln.clip(width).pad(width if selected else 0, St(bg=bg))
 
 
-# ------------------------------------------------------------------- rules
+# Rules
 
 RULES_TEXT = """\
 magrid plans every reservation against these rules. Times are Europe/Paris.
@@ -933,7 +933,7 @@ DEFAULT QUEUE (yeti, dahu, larochette, ...)
 ABACA (PRODUCTION) QUEUES (grdix, granite, grosminet, ...)
   No day or night rule. No advance reservation, except one starting within
   the hour (or with priority p1). Your group has a priority per cluster:
-  p1 up to 168 h, p2 96 h, p3 48 h, p4 24 h; a node can lower that with its
+  p1 up to 168 h, p2 96 h, p3 48 h, p4 24 h, and a node can lower that with its
   own maximum walltime. Higher priorities are scheduled first, so the start
   time of a queued job is an estimate and can move back.
 

@@ -1,14 +1,14 @@
 # The Grid'5000 rules magrid enforces, and where they come from
 
 Verified on 2026-10-05. `magrid doctor` tells you whether any of the three
-sources below has changed since; the fingerprints are in `magrid/verified.py`.
+sources below has changed since. The fingerprints are in `magrid/verified.py`.
 
 ## The three sources
 
 | Source | What it is | How to read it |
 |---|---|---|
 | Usage Policy | The written rules. Wiki revision 109283, last edited 16 September 2026. | <https://www.grid5000.fr/w/Grid5000:UsagePolicy>, with <https://www.grid5000.fr/w/Production> and <https://www.grid5000.fr/w/Advanced_OAR> |
-| `usagepolicycheck` 4.4.6 | The script run every week on all frontends; it sends the "usage has been violating the Usage Policy" e-mail. It is the definition of a violation in practice. | On any frontend: `/usr/lib/ruby/vendor_ruby/usagepolicychecker/usagepolicychecker.rb` |
+| `usagepolicycheck` 4.4.6 | The script run every week on all frontends. It sends the "usage has been violating the Usage Policy" e-mail. It is the definition of a violation in practice. | On any frontend: `/usr/lib/ruby/vendor_ruby/usagepolicychecker/usagepolicychecker.rb` |
 | OAR admission rules | Perl code OAR runs on every `oarsub`. What "the system enforces". | On any frontend: `PGPASSWORD=read psql -h oardb.<site>.grid5000.fr -U oarreader oar2 -c 'select rule from admission_rules order by priority, id'` (the read-only account is public, documented on the Advanced OAR page) |
 
 Where the written policy and the script differ, magrid satisfies both.
@@ -18,7 +18,7 @@ Where the written policy and the script differ, magrid satisfies both.
 All times are Europe/Paris. "Daytime" is 09:00 to 19:00 on working days:
 Monday to Friday, except French public holidays (1 January, Easter Monday,
 1 May, 8 May, Ascension Thursday, Pentecost Monday, 14 July, 15 August,
-1 November, 11 November, 25 December; this is the script's own list).
+1 November, 11 November, 25 December, the script's own list).
 
 **R1. Daily quota.** In daytime, a user may use at most 2 hours on all the
 cores of a cluster, per cluster and per day. The script counts cores times
@@ -38,18 +38,18 @@ then does not count in R1. There is no boundary at 17:00.
 
 **R4. The free hour.** A job of at most 1 hour that starts less than 10
 minutes after its submission does not count in R1. Neither does an extension
-of at most 1 hour requested during the last 10 minutes of the job; it can be
+of at most 1 hour requested during the last 10 minutes of the job. It can be
 repeated.
 
 **R5. Extensions** (`oarwalltime`). OAR accepts any extension that fits before
-the next reservation; the policy is checked afterwards. R3 applies with the
+the next reservation, and the policy is checked afterwards. R3 applies with the
 time of the request: an extension asked at or after 17:00 may carry a job
 through the night. R2 does not: it looks at when the job was submitted, so no
 extension can take a night or weekend job past 09:00.
 
 **R6. Advance reservations** (`oarsub -r`). Depending on the level of the
-user's group: gold, 2 waiting per site, any time ahead; silver, 2 per site, at
-most 48 hours ahead; bronze, 1 per site, 24 hours ahead. Only waiting
+user's group: gold, 2 waiting per site, any time ahead. Silver, 2 per site, at
+most 48 hours ahead. Bronze, 1 per site, 24 hours ahead. Only waiting
 reservations that start more than one hour from now are counted, and a new
 reservation that starts within the hour is exempt from both limits. Enforced
 by admission rule "Limit the number of advance reservations per user".
@@ -64,7 +64,7 @@ Consequences:
 - A job submitted after midnight can start at once and continue into the
   day, as far as the quota allows and not beyond 19:00.
 - The time of submission matters, not only the time of start. A reservation
-  made in the morning for 17:30 to 08:30 is a violation; the same one made at
+  made in the morning for 17:30 to 08:30 is a violation, the same one made at
   17:00 is not.
 
 ## What the script does that the text does not say
@@ -79,7 +79,7 @@ Read from the code and reproduced in `magrid/checker.py`:
 - A job that crosses 19:00 gets the R3 exemption only if it ends more than
   5 minutes after 19:00. One that ends at 19:03 has its whole daytime part
   counted in the quota. This is the one case where the script is stricter
-  than the text; magrid's double check exists for cases like it.
+  than the text, and magrid's double check exists for cases like it.
 - What counts is what ran: a job deleted before a boundary did not cross it,
   whatever its walltime was. `magrid` uses this to tell you until when a
   doomed job can still be ended cleanly.
@@ -92,7 +92,7 @@ magrid plans with none of these tolerances.
 
 From the Production page and the admission rule "Production queue rules":
 
-- No day or night rule; the script does not look at these queues.
+- No day or night rule: the script does not look at these queues.
 - Each group has a priority per nodeset: p1 (jobs up to 168 h), p2 (96 h),
   p3 (48 h), p4 (24 h), best-effort only, or no access. `oarsub -q abaca -p
   <cluster>` is routed to the group's priority queue for that cluster. Each
@@ -108,7 +108,7 @@ From the Production page and the admission rule "Production queue rules":
 
 ## Best-effort
 
-Admission rule "Tie besteffort type and queue": not open to bronze groups;
+Admission rule "Tie besteffort type and queue": not open to bronze groups,
 never an advance reservation. A best-effort job runs only on idle resources
 and is killed as soon as a regular job needs them. No day or night rule. At
 most 168 hours, like any job outside abaca.
@@ -134,7 +134,7 @@ most 168 hours, like any job outside abaca.
 around 09:00, 17:00 and 19:00, the tolerances, weekends, holidays and clock
 changes, with and without extensions, in the input format the script accepts
 through `INPUT_FILE_TIMES` and `INPUT_FILE_CORES`. The real script was run once
-on them on a frontend; its answer is `tests/fixtures/oracle_expected.json.gz`.
+on them on a frontend, and its answer is `tests/fixtures/oracle_expected.json.gz`.
 `tests/test_checker_oracle.py` requires the port to give the same core-seconds
 of daytime for every user, day and cluster, the same list of boundary-crossing
 jobs, and the same violations.

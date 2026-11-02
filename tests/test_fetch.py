@@ -148,7 +148,7 @@ class SlowSites(unittest.TestCase):
         c = snap.clusters["roazhon15"]
         self.assertEqual((c.state, c.as_of), ("stale", before.now))
         self.assertEqual([n.name for n in c.nodes], [n.name for n in before.clusters["roazhon15"].nodes])
-        self.assertTrue(any(p.startswith("rennes: the Grid'5000 API did not answer; showing what was read at") for p in snap.problems))
+        self.assertTrue(any(p.startswith("rennes: the Grid'5000 API did not answer, showing what was read at") for p in snap.problems))
         # and without anything read before: unread, said so
         snap = fetch.build_snapshot(values, files, self.ref, CLUSTERS)
         self.assertEqual(snap.clusters["roazhon15"].state, "unread")

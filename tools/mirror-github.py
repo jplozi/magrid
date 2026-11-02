@@ -40,7 +40,7 @@ def filtered(message: str) -> str:
 
 
 def rewrite() -> str:
-    """Re-create every commit of SOURCE without the trailers; return the new tip."""
+    """Re-create every commit of SOURCE without the trailers, and return the new tip."""
     mapping: dict[str, str] = {}
     tip = ""
     for c in git("rev-list", "--reverse", "--topo-order", SOURCE).split():

@@ -29,9 +29,9 @@ class Request:
     queue: str  # default, abaca or besteffort
     types: list[str]
     walltime: int
-    start: Optional[int] = None  # advance reservation; None: queued job
+    start: Optional[int] = None  # advance reservation, None for a queued job
     hosts: list[str] = field(default_factory=list)  # restrict to these nodes (short names)
-    avoid: list[str] = field(default_factory=list)  # never these nodes (short names); moot when hosts are named
+    avoid: list[str] = field(default_factory=list)  # never these nodes (short names), moot when hosts are named
     command: str = ""
     name: str = ""
     verdict: Optional[Verdict] = None

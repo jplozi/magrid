@@ -12,8 +12,8 @@ with a ProxyCommand that only forwards the connection (ssh -W), which is
 all the gateway allows from 2026-10-29.
 
 When the user's ssh configuration shares connections (ControlMaster auto),
-magrid goes through the shared connection and opens none of its own;
-otherwise it keeps one connection per frontend open for five minutes.
+magrid goes through the shared connection and opens none of its own.
+Otherwise it keeps one connection per frontend open for five minutes.
 """
 
 from __future__ import annotations
@@ -84,13 +84,13 @@ def gateway_check(settings: dict[str, str], host: str) -> tuple[Optional[bool], 
     if jump != "none":
         return True, f"ssh: {host} is reached through ProxyJump {jump}", ""
     if cmd == "none":
-        return None, f"ssh: {host} is reached directly", "right on a Grid'5000 machine; from outside, go through access.grid5000.fr (README)"
+        return None, f"ssh: {host} is reached directly", "right on a Grid'5000 machine. From outside, go through access.grid5000.fr (README)"
     if not cmd.startswith("ssh "):
         return None, f"ssh: {host} is reached through a ProxyCommand", cmd
     if re.search(r"(^|\s)-W(\s|$)", cmd):
         return True, f"ssh: {host} is reached through the gateway, which only forwards the connection", cmd
     return (False, f"ssh: the ProxyCommand for {host} runs a command on the gateway",
-            f"refused by access.grid5000.fr from 2026-10-29; use  ssh g5k -W \"$(basename %h .g5k):%p\"  (now: {cmd})")
+            f"refused by access.grid5000.fr from 2026-10-29. Use  ssh g5k -W \"$(basename %h .g5k):%p\"  (now: {cmd})")
 
 
 class Remote:

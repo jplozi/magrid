@@ -11,12 +11,12 @@ from pathlib import Path
 from .timefmt import parse_duration
 
 DEFAULT_TEXT = """\
-# magrid configuration. Every line is optional; these are the defaults.
+# magrid configuration. Every line is optional. These are the defaults.
 
 [magrid]
 # The clusters on the board: "auto" for those you have run jobs on in the last
 # two months (read from the OAR databases once a day), or a list of names.
-# "add" and "hide" are applied on top; the a and x keys of the board, and
+# "add" and "hide" are applied on top. The a and x keys of the board, and
 # "magrid add" and "magrid hide", write them.
 clusters = auto
 add =

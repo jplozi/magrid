@@ -320,7 +320,7 @@ class Board(Offline):
         rc, out = self.run_cli("board")
         self.assertEqual(rc, 0, out)
         rows = [ln.split()[0] for ln in out.splitlines() if ln.startswith(" ") and len(ln.split()) > 2 and ln.split()[1].isdigit()]
-        # used two days ago: in; chicoree, last used 100 days ago, is in only because a job of yours runs there;
+        # used two days ago: in. chicoree, last used 100 days ago, is in only because a job of yours runs there.
         # reservable first, then abaca
         self.assertEqual(rows, ["dahu", "yeti", "chicoree", "larochette", "granite", "grdix", "grosminet", "roazhon15"])
         self.assertTrue(any("hist_" in s for s in self.front.scripts))

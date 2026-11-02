@@ -9,8 +9,9 @@ before the job exists.
 
 The port is checked against the real script: see tests/test_checker_oracle.py.
 
-It is deliberately a transliteration. The stricter, tolerance-free reading of
-the written policy that magrid uses to *plan* reservations lives in policy.py.
+It follows the original closely, so that every tolerance and quirk is kept.
+The stricter, tolerance-free reading of the written policy that magrid uses to
+*plan* reservations lives in policy.py.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ class Job:
 
     resources maps a cluster name to the number of cores the job holds there.
     extensions lists the granted walltime changes in order, as
-    (request time, seconds added); walltime includes them.
+    (request time, seconds added), and walltime includes them.
     """
 
     id: str
@@ -260,12 +261,12 @@ class Violation:
             )
         if self.crossing:
             bits.append("crossed a 09:00 or 19:00 boundary (jobs " + ", ".join(self.usage.cross_boundaries_jobs) + ")")
-        return f"{self.cluster}, {self.day:%a %d %b}: " + "; ".join(bits)
+        return f"{self.cluster}, {self.day:%a %d %b}: " + " · ".join(bits)
 
 
 def violations(usage: Usage, cores: dict[str, int]) -> list[Violation]:
-    """Port of qualify_users. cores maps each default-queue cluster to its core count;
-    clusters absent from it (production clusters) are skipped, as in the original."""
+    """Port of qualify_users. cores maps each default-queue cluster to its core count.
+    Clusters absent from it (production clusters) are skipped, as in the original."""
     out = []
     for (user, day, cluster), u in sorted(usage.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
         n = cores.get(cluster)

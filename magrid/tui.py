@@ -34,8 +34,8 @@ HELP = """\
  THE BOARD
    Each row is a cluster, each column a slot: now, tonight, tomorrow, the weekend.
    A cell such as  3 x 13h55  says 3 nodes are free for 13 h 55. Green is the full
-   slot; amber is a window cut short by the daily quota or by a later reservation;
-   grey cannot be booked yet (the line below says when it opens).
+   slot. Amber is a window cut short by the daily quota or by a later reservation.
+   Grey cannot be booked yet (the line below says when it opens).
    Clusters of the abaca queues have one wide cell: their jobs are queued, not
    reserved, and start when the scheduler decides.
 
@@ -185,7 +185,7 @@ class Board:
         self.quota_sites = self.default_sites()
         self.recompute()
 
-    # ----------------------------------------------------------- data
+    # Data
 
     def default_sites(self) -> set[str]:
         ref = self.app.ref
@@ -323,7 +323,7 @@ class Board:
 
         threading.Thread(target=work, daemon=True).start()
 
-    # -------------------------------------------------------- helpers
+    # Helpers
 
     def say(self, text: str, st: St = DIM) -> None:
         self.message, self.message_style = text, st
@@ -375,7 +375,7 @@ class Board:
             self.picks.pop(key, None)
         self.say("")
 
-    # ------------------------------------------------------ node picker
+    # Node picker
 
     def pick_names(self, key) -> list[str]:
         """The nodes the picker moves over, in the order the detail lists them."""
@@ -437,7 +437,7 @@ class Board:
         self.say("")
 
     def toggle_avoid(self, name: str) -> None:
-        """Put a node on the avoid list, or take it off; kept in the configuration."""
+        """Put a node on the avoid list, or take it off, kept in the configuration."""
         cfg = self.app.cfg
         if name in cfg.avoid:
             if self.app.read_only:
@@ -455,7 +455,7 @@ class Board:
             self.say(f"{name} avoided from now on (x again allows it)", DIM)
         self.recompute()
 
-    # ----------------------------------------------------------- draw
+    # Draw
 
     def draw(self) -> None:
         self.scr.erase()
@@ -598,7 +598,7 @@ class Board:
         left.add(right, DIM)
         self.screen.put(h - 1, left)
 
-    # -------------------------------------------------------- actions
+    # Actions
 
     def leave(self, action) -> None:
         """Run something on the normal screen, then come back."""
@@ -698,7 +698,7 @@ class Board:
                 nxt = [b for b in node.busy(snap.now, skip_job=r.job_id) if b[0] + OAR_GAP >= r.end - 60]
                 first = min(nxt, key=lambda b: b[0]) if nxt else None
                 if first is not None and first[0] < new_end:
-                    new_end = first[0] - first[0] % 60  # a whole minute; OAR's gap before the next job is inside first[0]
+                    new_end = first[0] - first[0] % 60  # a whole minute, OAR's gap before the next job is inside first[0]
                     print(f" The node is taken from {fmt_ts(first[2].start)}: extending until {fmt_ts(new_end)}.")
             if new_end <= r.end + 60:
                 print(" Nothing to extend right now." + (f" {opts[-1].hint}" if opts[-1].hint else ""))
@@ -720,7 +720,7 @@ class Board:
 
         self.leave(action)
 
-    # ---------------------------------------------------- board edits
+    # Board edits
 
     def add_cluster(self, name: str) -> None:
         if name in self.on_board:
@@ -735,7 +735,7 @@ class Board:
             self.row = [c.name for c in self.clusters].index(name)
             self.say(f"{name} added to the board", OKB)
         else:
-            self.say(f"{name} added; reading {self.app.ref.site_of(name)}…", OKB)
+            self.say(f"{name} added, reading {self.app.ref.site_of(name)}…", OKB)
             self.pending_focus = name
         self.refresh_async()
 
@@ -808,7 +808,7 @@ class Board:
         self.screen.put(y, line(f" {more} · ↑↓ choose · Enter add · Esc close", DIM))
         return y + 1
 
-    # ------------------------------------------------------------ loop
+    # Loop
 
     def key(self, ch: int) -> bool:
         """Handle a key. False to quit."""
@@ -928,7 +928,7 @@ def run(app) -> int:
     thread = threading.Thread(target=work, daemon=True)
     thread.start()
     print("magrid: reading the platform…", end="", flush=True)
-    # everything if it comes quickly; otherwise what has come after 3 s, the rest fills in on the board
+    # everything if it comes quickly, otherwise what has come after 3 s, the rest fills in on the board
     while thread.is_alive() and (time.time() - progress.started < 3 or "now" not in progress.values):
         time.sleep(0.05)
     print("\r" + " " * 40 + "\r", end="", flush=True)
@@ -948,6 +948,6 @@ def run(app) -> int:
     try:
         curses.wrapper(main)
     except curses.error as e:
-        print(f"magrid: this terminal cannot show the board ({e}); try: magrid board")
+        print(f"magrid: this terminal cannot show the board ({e}). Try: magrid board")
         return 1
     return 0

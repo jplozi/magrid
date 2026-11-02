@@ -84,7 +84,7 @@ class OnTheRecording(unittest.TestCase):
 
 
 class NamedNodes(unittest.TestCase):
-    """Nodes picked by name show in the cell; avoided nodes are listed as such."""
+    """Nodes picked by name show in the cell, and avoided nodes are listed as such."""
 
     now = T(MON, 13, 10)
 
@@ -137,8 +137,8 @@ class Marker(unittest.TestCase):
         r = resv("me", T(MON, 19), T(TUE, 8, 55), now=self.now)
         snap = platform(self.now, yeti={"busy": {i: [r] for i in range(1, 5)}},
                         jobs=[my_job("grenoble", r, [f"yeti-{i}" for i in range(1, 5)], {"yeti": 256})])
-        self.assertEqual(self.cell(snap, "yeti", "tonight"), ["– ●4", "all busy"])
-        self.assertEqual(self.cell(snap, "yeti", "tonight", compact=True)[0], "– ●4")
+        self.assertEqual(self.cell(snap, "yeti", "tonight"), ["- ●4", "all busy"])
+        self.assertEqual(self.cell(snap, "yeti", "tonight", compact=True)[0], "- ●4")
 
     def test_text_gives_way_to_the_marker(self):
         def m(variants, mark, width=15):

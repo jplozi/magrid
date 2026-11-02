@@ -222,7 +222,7 @@ def _node_names(known: set[str], words: list[str]) -> list[str]:
     return out
 
 
-# -------------------------------------------------------------------- board
+# Board
 
 
 def build_offers(app: App, clusters, slots):
@@ -262,7 +262,7 @@ def cmd_board(app: App, args) -> int:
     return 0
 
 
-# ----------------------------------------------------------- clusters, add, hide
+# Clusters, add, hide
 
 
 def cmd_clusters(app: App, args) -> int:
@@ -317,7 +317,7 @@ def cmd_hide(app: App, args) -> int:
     if gone:
         app.out([Line().add(" ✔ ", OKB).add("hidden: " + " ".join(gone)), line(" (magrid add brings them back)", DIM)])
     else:
-        app.out([line(" None of these was on your board; they will stay off it.", DIM)])
+        app.out([line(" None of these was on your board. They will stay off it.", DIM)])
     _show_board(app)
     return 0
 
@@ -344,7 +344,7 @@ def cmd_allow(app: App, args) -> int:
     return 0
 
 
-# --------------------------------------------------------------------- jobs
+# Jobs
 
 
 def cmd_jobs(app: App, args) -> int:
@@ -380,7 +380,7 @@ def cmd_jobs(app: App, args) -> int:
     return 0
 
 
-# ---------------------------------------------------------------- who, gantt
+# Who, gantt
 
 
 def cmd_who(app: App, args) -> int:
@@ -424,7 +424,7 @@ def cmd_gantt(app: App, args) -> int:
     return 0
 
 
-# --------------------------------------------------------------------- book
+# Book
 
 
 def _when(args, now: int) -> plan.When:
@@ -490,7 +490,7 @@ def run_plan(app: App, pl: plan.Plan, *, say=None) -> tuple[int, list[oar.Outcom
             for t in (out.output + "\n" + out.error).strip().splitlines():
                 lines.append(line("     " + t, DIM))
             if out.job_id is not None:
-                lines.append(line(f"     job {out.job_id} was created but is not valid; OAR will discard it", DIM))
+                lines.append(line(f"     job {out.job_id} was created but is not valid: OAR will discard it", DIM))
             say(lines)
             continue
         oar.read_back(app.remote, out)
@@ -547,7 +547,7 @@ def cmd_book(app: App, args) -> int:
         wants = [plan.parse_want(s, None, known) for s in args.specs]
     except plan.PlanError as e:
         raise SystemExit(f"magrid: {e}")
-    if args.avoid:  # for this booking only; the configuration's avoid line always applies
+    if args.avoid:  # for this booking only (the configuration's avoid line always applies)
         app.cfg.avoid = list(app.cfg.avoid) + [n for n in _node_names(known, args.avoid) if n not in app.cfg.avoid]
     clusters = []
     for w in wants:
@@ -607,7 +607,7 @@ def remember(app: App, outcomes: list[oar.Outcome]) -> None:
         app.out([line(f" {' and '.join(new)} {'is' if len(new) == 1 else 'are'} now on your board.", DIM)])
 
 
-# ----------------------------------------------------------------- del, extend
+# Del, extend
 
 
 def _find_job(app: App, job_id: int):
@@ -646,7 +646,7 @@ def cmd_extend(app: App, args) -> int:
     width = app.width
     now = snap.now
     if not r.running:
-        raise SystemExit(f"magrid: job {r.job_id} is not running; OAR only extends running jobs (delete and book again)")
+        raise SystemExit(f"magrid: job {r.job_id} is not running. OAR only extends running jobs (delete and book again)")
     lines = views.jobs_view(Snapshot(now=now, jobs=[j]), [], width, title=False)
     if r.queue != "default" or r.besteffort:
         lines.append(line(f"   Job in the {r.queue} queue: the day and night rules do not apply.", DIM))
@@ -727,7 +727,7 @@ def cmd_extend(app: App, args) -> int:
     return 0 if ok else 1
 
 
-# -------------------------------------------------------------------- check
+# Check
 
 
 def cmd_check(app: App, args) -> int:
@@ -759,7 +759,7 @@ def cmd_check(app: App, args) -> int:
     return 1 if (findings or official.flagged) else 0
 
 
-# ---------------------------------------------------------- rules, config, doctor
+# Rules, config, doctor
 
 
 def cmd_rules(app: App, args) -> int:
@@ -786,7 +786,7 @@ def cmd_tui(app: App, args) -> int:
     return tui.run(app)
 
 
-# --------------------------------------------------------------------- main
+# Main
 
 EPILOG = """\
 examples:
@@ -800,7 +800,7 @@ examples:
   magrid book yeti-2 -n          dry run on a given node: show the command only
   magrid who roazhon15           who holds it, until when
   magrid board arm               the ARM clusters (also: lyon, gpu, x86, power, exotic, abaca, all)
-  magrid clusters arm lyon       every cluster, filtered; ✓ marks those on your board
+  magrid clusters arm lyon       every cluster, filtered (✓ marks those on your board)
   magrid add hydra pyxis         put them on your board (magrid hide takes them off)
   magrid book yeti:2 --avoid yeti-4   any two yeti nodes but yeti-4
   magrid avoid yeti-4            never book yeti-4, until magrid allow yeti-4
@@ -839,7 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = add("board", cmd_board, "what you can book, printed", aliases=["b", "status"])
     sp.add_argument("names", nargs="*", metavar="what",
-                    help="clusters, nodes, sites (lyon) or groups (arm, x86, power, gpu, exotic, abaca, recent, all); default: your board")
+                    help="clusters, nodes, sites (lyon) or groups (arm, x86, power, gpu, exotic, abaca, recent, all). Default: your board")
     sp.add_argument("-g", "--gantt", action="store_true", help="add the timeline of each cluster")
 
     sp = add("tui", cmd_tui, "the interactive board (the default on a terminal)", aliases=["i"])
@@ -864,7 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-t", "--types", action="append", metavar="TYPES", help="job types instead of the configured ones (exotic is added as needed)")
     g.add_argument("--margin", metavar="DURATION", help="end this long before a boundary (default: from the configuration, 5m)")
     g.add_argument("--name", help="a name for the jobs (oarsub -n)")
-    g.add_argument("--avoid", action="append", metavar="NODES", help="never these nodes (yeti-4); the avoid line of the configuration always applies")
+    g.add_argument("--avoid", action="append", metavar="NODES", help="never these nodes (yeti-4), on top of the avoid line of the configuration")
     g.add_argument("--wait", action="store_true", help="if it is too early to reserve (48 h rule), stay running and book the moment it opens")
     g.add_argument("-n", "--dry-run", action="store_true", help="show the commands, submit nothing")
     g.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")

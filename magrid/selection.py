@@ -43,7 +43,7 @@ def usable(d: dict, access: dict[str, str]) -> bool:
 
 
 def order(names: Iterable[str], clusters: dict[str, dict], access: dict[str, str]) -> list[str]:
-    """Reservable clusters first, then abaca by priority, then best-effort only;
+    """Reservable clusters first, then abaca by priority, then best-effort only,
     by site and name inside each group."""
     def key(name):
         d = clusters[name]
@@ -155,7 +155,7 @@ def search_text(name: str, d: dict, access: dict[str, str]) -> str:
 
 def search(text: str, clusters: dict[str, dict], access: dict[str, str], *, include_unusable: bool = False,
            first: Iterable[str] = ()) -> list[str]:  # fmt: skip
-    """Clusters matching every word of the text; names that start with the
+    """Clusters matching every word of the text. Names that start with the
     first word come first, then those in `first` (the board), then by site."""
     words = text.lower().split()
     first = set(first)

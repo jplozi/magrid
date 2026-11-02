@@ -50,7 +50,7 @@ def xterm(i: int) -> str:
     return "#%02x%02x%02x" % (v, v, v)
 
 
-# ------------------------------------------------------------ the platform
+# The platform
 
 
 def T(day: dt.date, h: int, m: int = 0) -> int:
@@ -116,7 +116,7 @@ def platform() -> Snapshot:
     return snap
 
 
-# ---------------------------------------------------------------- the screen
+# The screen
 
 
 def screen(snap: Snapshot, width: int) -> list[term.Line]:

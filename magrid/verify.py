@@ -154,7 +154,7 @@ def doctor(app) -> int:
                     f"ControlMaster {settings['controlmaster']}, ControlPersist {settings.get('controlpersist', 'no')}")  # fmt: skip
             else:
                 say(None, f"ssh: your configuration shares no connection to {host}",
-                    "magrid keeps one of its own for 5 minutes; for the interactive board, set ControlMaster auto (README)")  # fmt: skip
+                    "magrid keeps one of its own for 5 minutes. For the interactive board, set ControlMaster auto (README)")  # fmt: skip
     try:
         ref = load_reference(app.remote, app.cfg, refresh=True)
         app.ref = ref
@@ -192,7 +192,7 @@ done
 
     offset = time.time() - int(values.get("now") or time.time())
     say(abs(offset) < 30, f"clock: this machine is {abs(offset):.0f} s {'ahead of' if offset > 0 else 'behind'} the frontend",
-        "magrid uses the frontend's clock" if abs(offset) < 30 else "large offset; magrid uses the frontend's clock, but check this machine")  # fmt: skip
+        "magrid uses the frontend's clock" if abs(offset) < 30 else "large offset. magrid uses the frontend's clock, but check this machine")  # fmt: skip
     missing = values.get("tools", "").split()
     say(not missing, "tools on the frontend: oarsub, oarstat, oardel, oarwalltime, usagepolicycheck, curl",
         ("missing: " + " ".join(missing)) if missing else "")  # fmt: skip

@@ -4,7 +4,7 @@
 This creates real jobs on Grid'5000, for a few seconds each. It exists to
 check that OAR accepts the exact argument sets magrid generates and that what
 OAR records matches what was planned. Queued jobs (abaca, best-effort) are
-created on hold, so they are never scheduled; reservations are made for a
+created on hold, so they are never scheduled, and reservations are made for a
 future slot, so no node is ever touched.
 
     tests/live/probe.py --yes-submit-and-delete yeti:2 --tonight

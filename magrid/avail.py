@@ -5,8 +5,8 @@ A slot is a column of the board: "now", then each coming policy period
 
 An offer is a cell: one cluster in one slot. On a default-queue cluster it is
 an advance reservation whose window is the longest one the Usage Policy
-allows; on an abaca cluster it is a queued job, with an estimate of when it
-would start; on a cluster the user can only use in best-effort, a best-effort
+allows. On an abaca cluster it is a queued job, with an estimate of when it
+would start. On a cluster the user can only use in best-effort, a best-effort
 job.
 """
 
@@ -144,7 +144,7 @@ class Offer:
         return self.count if self.mode == "reserve" else len(self.est)
 
 
-# ------------------------------------------------------- default queue
+# Default queue
 
 
 def _stretches(node: Node, now: int, start: int, limit: int) -> list[NodeWindow]:
@@ -190,7 +190,7 @@ def _best_window(
 
     prefer picks among the legal ends: None for the longest, "short" for the
     one that stays inside the period it starts in. until caps the end. With a
-    duration, the earliest window of that length wins; failing that, the
+    duration, the earliest window of that length wins, or failing that the
     longest shorter one.
     """
     quota = snap.quota(cluster.name)
@@ -226,8 +226,8 @@ def _best_window(
         cand = Window(s, end, [w.node for w in fit[:k]], opt, v, why)
         if duration is not None and cand.duration >= duration - 60:
             return cand  # the earliest window of the length asked for
-        # the longest window wins; within two minutes of it, the one with more nodes (a stretch
-        # opening just after a job is as good as the slot itself); otherwise the earliest
+        # the longest window wins. Within two minutes of it, the one with more nodes (a stretch
+        # opening just after a job is as good as the slot itself), otherwise the earliest
         if best is None or cand.duration > best.duration + 120 or (cand.duration >= best.duration - 120 and room > best_room):
             best, best_room = cand, room
     return best
@@ -295,7 +295,7 @@ def restricted(snap: Snapshot, offer: Offer, hosts: Iterable[str], margin: int, 
     return out
 
 
-# ----------------------------------------------------- queued jobs
+# Queued jobs
 
 
 def _queue_blockers(node: Node, now: int, my_queue: str) -> list[tuple[int, int, Resv]]:
@@ -396,7 +396,7 @@ def build_offers(snap: Snapshot, clusters: list[Cluster], all_slots: list[Slot],
     return offers
 
 
-# ------------------------------------------------------------ text
+# Text
 
 
 def describe(offer: Offer, now: int) -> str:

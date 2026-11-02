@@ -124,7 +124,7 @@ class EndOptions(unittest.TestCase):
                          [(T(MON, 18, 55), None, "period"), (T(TUE, 8, 55), "evening", "period")])
         now = T(FRI, 17, 10)
         self.assertEqual(self.ends(now, now + 60, cores=64, quota=yeti())[-1], (T(MON2, 8, 55), "evening", "period"))
-        # With the quota used up, staying in the day is the free hour; the night is still open.
+        # With the quota used up, staying in the day is the free hour, and the night is still open.
         now = T(MON, 17, 10)
         self.assertEqual(self.ends(now, now + 60, cores=64, quota=yeti({MON: 512 * H})),
                          [(now + 60 + H, None, "short"), (T(TUE, 8, 55), "evening", "period")])

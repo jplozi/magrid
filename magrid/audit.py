@@ -26,7 +26,7 @@ class Finding:
 
     @property
     def text(self) -> str:
-        return "; ".join(self.problems)
+        return " · ".join(self.problems)
 
 
 def _as_checker_job(j: MyJob, stop: Optional[int] = None) -> checker.Job:

@@ -24,7 +24,7 @@ The rules, for a job in the default queue (all times Europe/Paris):
       none starting more than 48 hours ahead (24 for bronze, no limit for
       gold). Reservations starting within the hour are exempt from both.
 
-Jobs in the abaca queues and best-effort jobs are outside R1 to R5; their own
+Jobs in the abaca queues and best-effort jobs are outside R1 to R5. Their own
 limits are in abaca_limit() and BESTEFFORT_MAX_WALLTIME.
 """
 
@@ -55,7 +55,7 @@ class Level:
 
     name: str
     max_reservations: int
-    max_delay: Optional[int]  # seconds; None: no limit
+    max_delay: Optional[int]  # seconds, None for no limit
     besteffort: bool
 
 
@@ -246,8 +246,8 @@ def judge_window(
                 v.add(
                     "R3",
                     False,
-                    f"would cross 19:00 on {fmt_day(day)}. Only a job submitted at or after 17:00 that day may; "
-                    f"before 17:00, end at 19:00 or start at 19:00",
+                    f"would cross 19:00 on {fmt_day(day)}. Only a job submitted at or after 17:00 that day may. "
+                    f"Before 17:00, end at 19:00 or start at 19:00",
                 )
         seconds = _overlap(start, end, b9, b19)
         if seconds <= 0:
@@ -262,7 +262,7 @@ def judge_window(
         checker.Job("new", "me", now, start, end, end - start, {cluster or "cluster": cores or 1})
     )
     if crossing and v.ok:
-        v.add("script", False, "usagepolicycheck would flag it: " + "; ".join(reasons))
+        v.add("script", False, "usagepolicycheck would flag it: " + " · ".join(reasons))
     _settle(v, written, script, cores, quota, cluster)
     if not v.findings:
         p = cal.period_at(start)
@@ -287,7 +287,7 @@ def judge_reservation(now: int, start: int, lvl: Level, waiting: int, site: str 
         v.add(
             "R6",
             False,
-            f"starts in {fmt_dur(lead)}; your level ({lvl.name}) may reserve at most "
+            f"starts in {fmt_dur(lead)}: your level ({lvl.name}) may reserve at most "
             f"{lvl.max_delay // HOUR} h ahead. Bookable from {fmt_ts(opens)}",
         )
     else:
@@ -297,7 +297,7 @@ def judge_reservation(now: int, start: int, lvl: Level, waiting: int, site: str 
         v.add(
             "R6",
             False,
-            f"you already have {waiting} advance reservation{'s' if waiting > 1 else ''} waiting{where}; "
+            f"you already have {waiting} advance reservation{'s' if waiting > 1 else ''} waiting{where}, and "
             f"the limit is {lvl.max_reservations}",
         )
     else:
@@ -435,7 +435,7 @@ def judge_extension(
     days_before, crossed_before, _ = _script_view(before)
     days_after, crossing, reasons = _script_view(after)
     if crossing and not crossed_before and v.ok:
-        v.add("script", False, "usagepolicycheck would flag it: " + "; ".join(reasons))
+        v.add("script", False, "usagepolicycheck would flag it: " + " · ".join(reasons))
     script = {d: s - days_before.get(d, 0) for d, s in days_after.items() if s > days_before.get(d, 0)}
     _settle(v, written, script, cores, quota, cluster)
     if not v.findings:
@@ -455,7 +455,7 @@ def extension_options(
     history: tuple[tuple[int, int], ...] = (),
 ) -> list[EndOption]:
     """The latest legal new ends for a running job, shortest first. An option
-    whose end equals cur_end means "nothing now"; its hint says when to ask."""
+    whose end equals cur_end means "nothing now", and its hint says when to ask."""
     cands: list[tuple[int, Optional[str], str, str]] = []
     p = cal.period_at(cur_end)
     nothing_hint = ""

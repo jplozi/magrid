@@ -54,7 +54,7 @@ def parse_want(spec: str, snap: Snapshot, known: set[str]) -> Want:
 
 
 def merge_wants(wants: list[Want]) -> list[Want]:
-    """yeti-1 yeti-2 becomes one want for two named nodes; yeti yeti becomes yeti:2."""
+    """yeti-1 yeti-2 becomes one want for two named nodes, and yeti yeti becomes yeti:2."""
     out: dict[str, Want] = {}
     for w in wants:
         cur = out.get(w.cluster)
@@ -80,7 +80,7 @@ def ceil_minute(ts: int) -> int:
 class When:
     """When the user wants the machines."""
 
-    slot: Optional[str] = None  # now, tonight, weekend, tomorrow, ...; None: as early as possible
+    slot: Optional[str] = None  # now, tonight, weekend, tomorrow, ... or None for as early as possible
     start: Optional[int] = None  # explicit start
     until: Optional[int] = None  # explicit end
     duration: Optional[int] = None
@@ -195,7 +195,7 @@ def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, no
             if opens is not None and opens > now and len(r6.problems) == 1 and "ahead" in r6.problems[0].text:
                 plan.opens = opens if plan.opens is None else max(plan.opens, opens)
             if split and jobs > 1:
-                last_problem += f" ({jobs} separate jobs were asked for; without --split it is a single reservation)"
+                last_problem += f" ({jobs} separate jobs were asked for, and without --split it is a single reservation)"
             continue
         floating = slot.is_now and w.start <= now + LEAD + 60
         start = ceil_minute(w.start) if floating else w.start
@@ -233,7 +233,7 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
            besteffort: bool, plan: Plan) -> None:  # fmt: skip
     if when.start is not None or (when.slot and when.slot != "now"):
         plan.notes.append(
-            f"{c.name}: jobs on this cluster are queued, not reserved for a date; submitted now, "
+            f"{c.name}: jobs on this cluster are queued, not reserved for a date. Submitted now, "
             f"they start as soon as the scheduler lets them"
         )
     slot = avail.slots(now)[0]
@@ -265,7 +265,7 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
     if offer.mode == "besteffort":
         notes.append("best-effort: killed without notice as soon as a regular job needs the node")
     else:
-        notes.append(f"abaca queue {offer.queue}: no day or night rule; the start is decided by the scheduler")
+        notes.append(f"abaca queue {offer.queue}: no day or night rule, and the start is decided by the scheduler")
         if offer.ahead:
             notes.append(f"{offer.ahead} queued job{'s' if offer.ahead > 1 else ''} of equal or higher priority may go first")
     jobs = k if split else 1
@@ -334,9 +334,9 @@ def finalize(item: Planned, snap: Snapshot, now: int) -> Optional[str]:
     early = policy.judge_window(now - CLOCK_GUARD, req.start, end, cores=item.cores, quota=snap.quota(req.cluster),
                                 cluster=req.cluster)  # fmt: skip
     if v.ok and not early.ok:
-        return f"{req.cluster}: too close to the minute this becomes allowed; try again in a few seconds"
+        return f"{req.cluster}: too close to the minute this becomes allowed, try again in a few seconds"
     if not v.ok:
-        return f"{req.cluster}: " + "; ".join(f.text for f in v.problems)
+        return f"{req.cluster}: " + " · ".join(f.text for f in v.problems)
     lvl = snap.level or policy.level("bronze")
     r6 = policy.judge_reservation(now, req.start, lvl, len(snap.waiting_reservations(req.site, now)), req.site)
     if not r6.ok:
