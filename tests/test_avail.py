@@ -152,6 +152,17 @@ class Reserve(unittest.TestCase):
         node = cluster("yeti", 1, busy={1: [r]}).nodes[0]
         self.assertEqual(node.busy(now)[0][:2], (T(TUE, 9) - 61, T(TUE, 12) + 61))
         self.assertEqual(node.free_from(now)[0], (now, T(TUE, 9) - 61))
+        node = cluster("larochette", 1, site="luxembourg", busy={1: [r]}).nodes[0]  # 120 s there
+        self.assertEqual(node.busy(now)[0][:2], (T(TUE, 9) - 121, T(TUE, 12) + 121))
+
+    def test_the_gap_depends_on_the_site(self):
+        # 2026-11-03: a reservation at 12:50 on larochette after a job ending at 12:48:00 was refused by
+        # Luxembourg's OAR ("could run at 12:50:01"), whose security time is 120 s, not Grenoble's 60 s
+        now = T(MON, 11, 10)
+        for name, site, expected in (("yeti", "grenoble", T(MON, 12, 50)), ("larochette", "luxembourg", T(MON, 12, 51))):
+            r = resv("bob", T(MON, 9), T(MON, 12, 48), now=now)
+            snap = snapshot(now, [cluster(name, 1, site=site, busy={1: [r]})])
+            self.assertEqual(offer(snap, name, "now").best.start, expected, site)
 
     def test_oar_gap_after_a_job_ending_on_the_hour(self):
         # 2026-10-25, grenoble: admin jobs held every yeti node until Mon 19:00:00 and OAR answered
@@ -223,7 +234,7 @@ class Queue(unittest.TestCase):
         now = T(MON, 13, 10)
         holder = resv("bob", T(MON, 9), T(MON, 18), queue="p1", kind="B", now=now)
         o = offer(platform(now, roazhon15={"busy": {1: [holder]}}), "roazhon15", "now")
-        self.assertEqual((o.mode, o.queue, o.est[0][0]), ("besteffort", "besteffort", T(MON, 18, 1)))
+        self.assertEqual((o.mode, o.queue, o.est[0][0]), ("besteffort", "besteffort", T(MON, 18, 2)))  # rennes: 120 s
         self.assertEqual(offer(platform(now, level="bronze"), "roazhon15", "now").blocked[:11], "best-effort")
 
     def test_no_access(self):

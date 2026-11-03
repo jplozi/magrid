@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import avail, fetch, oar, plan, policy, selection, verify, views
-from .model import OAR_GAP, Snapshot
+from .model import Snapshot
 from .remote import RemoteError
 from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, emit, line, text_colour, wrap
 from .timefmt import fmt_dur, fmt_ts, fmt_when
@@ -695,7 +695,7 @@ class Board:
             new_end = opts[-1].end
             node = snap.node(j.nodes[0]) if j.nodes else None
             if node is not None:
-                nxt = [b for b in node.busy(snap.now, skip_job=r.job_id) if b[0] + OAR_GAP >= r.end - 60]
+                nxt = [b for b in node.busy(snap.now, skip_job=r.job_id) if b[0] + node.gap >= r.end - 60]
                 first = min(nxt, key=lambda b: b[0]) if nxt else None
                 if first is not None and first[0] < new_end:
                     new_end = first[0] - first[0] % 60  # a whole minute, OAR's gap before the next job is inside first[0]

@@ -8,14 +8,15 @@ from typing import Optional
 
 from .policy import Level, Quota
 
+from . import verified
+
 ACTIVE_STATES = ("waiting", "launching", "running", "hold", "tolaunch", "toackreservation", "finishing", "resuming", "suspended")
 HORIZON = 10**11  # "forever", as a timestamp
-# OAR leaves SCHEDULER_JOB_SECURITY_TIME (60 s on Grid'5000) between two jobs on
-# the same resource, and its timeline counts whole seconds inclusively: a job
-# ending at 19:00:00 frees the node at 19:01:01 ("This reservation could run at
-# 2026-10-26 19:01:01", grenoble, 2026-10-25), and a job must end 61 s before
-# the next one starts. Every busy interval is widened by this on both sides.
-OAR_GAP = 61
+# OAR leaves a security time between two jobs on the same resource (60 s at
+# some sites, 120 s at others: verified.OAR_SECURITY_TIME), and its timeline
+# counts whole seconds inclusively: at grenoble a job ending at 19:00:00 frees
+# the node at 19:01:01 ("This reservation could run at 2026-10-26 19:01:01",
+# 2026-10-25). Every busy interval is widened by its site's gap on both sides.
 
 
 @dataclass
@@ -116,6 +117,11 @@ class Node:
     resvs: list[Resv] = field(default_factory=list)
 
     @property
+    def gap(self) -> int:
+        """What OAR keeps between two jobs on this node: its site's security time plus a second."""
+        return verified.oar_gap(self.site)
+
+    @property
     def fqdn(self) -> str:
         return f"{self.name}.{self.site}.grid5000.fr"
 
@@ -130,11 +136,12 @@ class Node:
         return int(m.group(1)) if m else 0
 
     def busy(self, now: int, *, soft: bool = True, besteffort: bool = False, skip_job: int = 0) -> list[tuple[int, int, Resv]]:
-        """Busy intervals from now on, sorted, each widened by OAR_GAP on both
-        sides (what OAR needs between two jobs on a resource). Predicted slots of
+        """Busy intervals from now on, sorted, each widened by the site's gap on
+        both sides (what OAR needs between two jobs on a resource). Predicted slots of
         queued batch jobs are included when soft is True, and best-effort jobs, which
         any regular job evicts, only when besteffort is True."""
         out = []
+        gap = self.gap
         for r in self.resvs:
             if r.job_id == skip_job or not r.start:
                 continue
@@ -142,9 +149,9 @@ class Node:
                 continue
             if not r.firm and not soft:
                 continue
-            end = (max(r.end, now + 60) if r.running else r.end) + OAR_GAP
+            end = (max(r.end, now + 60) if r.running else r.end) + gap
             if end > now:
-                out.append((max(r.start, now) if r.running else r.start - OAR_GAP, end, r))
+                out.append((max(r.start, now) if r.running else r.start - gap, end, r))
         out.sort(key=lambda t: (t[0], t[1]))
         return out
 

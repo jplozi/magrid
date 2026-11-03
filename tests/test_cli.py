@@ -28,6 +28,7 @@ class FakeFrontend:
     """Stands in for magrid.remote.Remote."""
 
     alone_on = None  # a node on which only the user's own jobs are kept
+    could_run_at = None  # OAR's answer to the next reservation: created, then found invalid
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -92,6 +93,12 @@ class FakeFrontend:
         if argv[0] == "oarsub":
             if self.refuse:
                 return Result(2, "", self.refuse)
+            if self.could_run_at:
+                when, self.could_run_at = self.could_run_at, None
+                jid = str(self.next_id)
+                self.next_id += 1
+                return Result(0, f"OAR_JOB_ID={jid}\n# Advance reservation request: waiting for validation...\n"
+                              f"# Reservation not valid --> KO (This reservation could run at {when})\n", "")  # fmt: skip
             jid = str(self.next_id)
             self.next_id += 1
             start = 0
@@ -210,6 +217,18 @@ class CommandLine(Offline):
         self.assertEqual(rc, 1)
         self.assertEqual(self.front.commands, [])
         self.assertIn("would cross 19:00", " ".join(out.split()))
+
+    def test_a_reservation_oar_can_only_start_later_is_shifted(self):
+        with mock.patch.object(FakeFrontend, "could_run_at", "2026-10-05 19:01:01"):  # OAR's gap after a job ending at 19:00:00
+            rc, out = self.run_cli("book", "yeti:1", "--tonight", "-y")
+        self.assertEqual(rc, 0)
+        subs = self.subs()
+        self.assertEqual(len(subs), 2)
+        self.assertEqual(subs[0][1][-3:], ["2026-10-05 19:00:00", "-l", "{cluster='yeti'}/nodes=1,walltime=13:55:00"])
+        self.assertEqual(subs[1][1][-3:], ["2026-10-05 19:02:00", "-l", "{cluster='yeti'}/nodes=1,walltime=13:53:00"])
+        self.assertIn("could run at", out)
+        self.assertIn("19:02", out)
+        self.assertIn("job 9000002", out)  # the second submission went through
 
     def test_avoid_and_allow(self):
         from magrid import config

@@ -107,11 +107,14 @@ busy). The latest legal end of a window starting at a given time depends on
 the submission time, the period (day, night, weekend) and the remaining
 quota for the number of nodes requested. The window retained is the longest
 one during which the requested number of nodes is simultaneously free. OAR
-itself leaves 60 seconds between two jobs on a node, plus the second its
-timeline counts: magrid keeps that gap on both sides of every recorded job, so
-a window after a job ending at 19:00:00 starts at 19:02 (the next whole
-minute) and one before a job starting at 08:30:00 ends at 08:28. Every
-candidate window is checked twice: against the written rules read without
+itself leaves a security time between two jobs on a node, 60 seconds at
+Grenoble and Nancy and 120 at the other sites (measured from each site's
+scheduler on 2026-11-03), plus the second its timeline counts: magrid keeps
+that gap on both sides of every recorded job, so at Grenoble a window after a
+job ending at 19:00:00 starts at 19:02, the next whole minute, and one before
+a job starting at 08:30:00 ends at 08:28. Should OAR still answer that a
+reservation could only run later, magrid offers the same request from the
+minute OAR names. Every candidate window is checked twice: against the written rules read without
 tolerance (`magrid/policy.py`), and against a port of `usagepolicycheck`
 (`magrid/checker.py`). A window is offered only if both accept it.
 

@@ -946,6 +946,10 @@ ALSO ENFORCED BY OAR
   oarsub -I without -r is limited to 12 hours, which is why magrid reserves
   with -r even for "now". A job is at most 168 hours long. Your default queue
   depends on your group, so magrid always passes -q.
+  OAR leaves a security time between two jobs on a node, 60 s at grenoble and
+  nancy, 120 s at the other sites, which magrid keeps on both sides of every
+  job. If OAR still answers that a reservation could run later, magrid offers
+  the same request from the minute OAR names.
 
 magrid plans without using the tolerances of the official checker (5 minutes
 around the boundaries, 5% on the quota) and ends reservations 5 minutes before

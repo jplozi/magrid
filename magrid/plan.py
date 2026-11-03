@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -70,6 +71,32 @@ def merge_wants(wants: list[Want]) -> list[Want]:
         else:
             cur.count += w.count
     return list(out.values())
+
+
+_COULD_RUN = re.compile(r"could run at (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})")
+
+
+def shifted_request(req: Request, answer: str, snap: Snapshot, now: int) -> Optional[Request]:
+    """OAR answered "This reservation could run at T" (the gap it keeps after the
+    previous job on the nodes): the same reservation from the whole minute after
+    T, ending as planned, if the rules still allow it."""
+    m = _COULD_RUN.search(answer)
+    if m is None or not req.is_reservation:
+        return None
+    y, mo, d, h, mi, se = (int(x) for x in m.groups())
+    start = ceil_minute(cal.at(dt.date(y, mo, d), h, mi, se))
+    end = req.start + req.walltime
+    if start <= req.start or end - start < avail.MIN_DURATION:
+        return None
+    c = snap.clusters.get(req.cluster)
+    cores = req.nodes * (c.cores_per_node if c else 0)
+    v = policy.judge_window(now, start, end, cores=cores, quota=snap.quota(req.cluster), cluster=req.cluster)
+    if not v.ok:
+        return None
+    new = copy.copy(req)
+    new.start, new.walltime, new.verdict = start, end - start, v
+    new.notes = list(req.notes) + [f"from {fmt_ts(start)} instead of {fmt_ts(req.start)}: OAR keeps a gap after the previous job"]
+    return new
 
 
 def ceil_minute(ts: int) -> int:

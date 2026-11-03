@@ -180,6 +180,7 @@ echo "@@checker $(sha256sum {verified.CHECKER_PATH} 2>/dev/null | cut -d' ' -f1)
 echo "@@package $(dpkg-query -W -f='${{Package}} ${{Version}}' usagepolicycheck 2>/dev/null)"
 for s in {' '.join(ref.sites)}; do
   ( h=$(PGPASSWORD=read PGCONNECT_TIMEOUT=8 psql -h oardb.$s.grid5000.fr -U oarreader oar2 -At -c "{verified.ADMISSION_RULES_SQL}" 2>/dev/null); echo "$h" > "$d/rules_$s" ) &
+  ( g=$(PGPASSWORD=read PGCONNECT_TIMEOUT=8 psql -h oardb.$s.grid5000.fr -U oarreader oar2 -At -c "{verified.OAR_GAP_SQL}" 2>/dev/null); echo "$g" > "$d/gap_$s" ) &
 done
 """ + FETCH_EPILOGUE
     try:
@@ -219,6 +220,21 @@ done
     for s in sites:
         if s in unread:
             say(None, f"could not read the admission rules of {s}")
+    moved, measured, no_data = [], 0, []
+    for s in ref.sites:
+        g = (files.get(f"gap_{s}") or b"").decode().strip()
+        if not g.isdigit():
+            no_data.append(s)
+            continue
+        measured += 1
+        seen = round(int(g) / 60) * 60  # predictions of queued jobs sit 0 or 1 s before the second OAR counts
+        if seen != verified.oar_security_time(s):
+            moved.append(f"{s}: {seen} s (magrid keeps {verified.oar_security_time(s)})")
+    if moved:
+        say(False, "OAR's gap between jobs CHANGED at " + ", ".join(moved), "update verified.OAR_SECURITY_TIME")
+    else:
+        say(True, f"OAR's gap between jobs: as verified on {measured} sites",
+            f"no waiting job to measure at {', '.join(no_data)}: {verified.OAR_SECURITY_DEFAULT} s assumed" if no_data else "")  # fmt: skip
     try:
         with urllib.request.urlopen(verified.WIKI_URL, timeout=15) as r:
             page = r.read().decode(errors="replace")

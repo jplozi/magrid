@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__, audit, avail, config, fetch, oar, plan, policy, selection, verify, views
-from .model import OAR_GAP, Snapshot
+from .model import Snapshot
 from .remote import Remote, RemoteError
 from .term import BAD, BADB, DIM, HEAD, OK, OKB, PLAIN, TITLE, WARN, Line, emit, line, set_theme, term_width, use_color, wrap
 from .timefmt import TimeError, fmt_dur, fmt_ts, fmt_when, parse_duration, parse_time
@@ -462,10 +462,22 @@ def confirm(question: str) -> bool:
         return False
 
 
-def run_plan(app: App, pl: plan.Plan, *, say=None) -> tuple[int, list[oar.Outcome]]:
+def _refusal_lines(out: oar.Outcome) -> list[Line]:
+    lines = [Line().add(" ✘ ", BADB).add(f"{out.request.cluster}: OAR refused the request", BAD)]
+    for t in (out.output + "\n" + out.error).strip().splitlines():
+        lines.append(line("     " + t, DIM))
+    if out.job_id is not None:
+        lines.append(line(f"     job {out.job_id} was created but is not valid: OAR will discard it", DIM))
+    return lines
+
+
+def run_plan(app: App, pl: plan.Plan, *, say=None, ask=None) -> tuple[int, list[oar.Outcome]]:
     """Submit the requests of a plan one by one, each re-checked against the
-    rules at the second it is sent. Returns (failures, outcomes)."""
+    rules at the second it is sent. When OAR answers that a reservation could
+    only run later, the same request from that minute is offered (ask decides).
+    Returns (failures, outcomes)."""
     say = say or (lambda lines: app.out(lines))
+    ask = ask or confirm
     snap = app.snap
     if app.now() - snap.now > 120:  # the picture is getting old: look again before committing
         snap = app.load(list(dict.fromkeys(it.cluster.name for it in pl.items)), job_nodes=False)
@@ -483,16 +495,22 @@ def run_plan(app: App, pl: plan.Plan, *, say=None) -> tuple[int, list[oar.Outcom
             failures += 1
             continue
         out = oar.submit(app.remote, req)
-        outcomes.append(out)
         if not out.ok:
-            failures += 1
-            lines = [Line().add(" ✘ ", BADB).add(f"{req.cluster}: OAR refused the request", BAD)]
-            for t in (out.output + "\n" + out.error).strip().splitlines():
-                lines.append(line("     " + t, DIM))
-            if out.job_id is not None:
-                lines.append(line(f"     job {out.job_id} was created but is not valid: OAR will discard it", DIM))
-            say(lines)
-            continue
+            say(_refusal_lines(out))
+            shifted = plan.shifted_request(req, out.output + "\n" + out.error, live, now)
+            if shifted is not None:
+                say([Line().add(" ").add(f"OAR can start it at {fmt_ts(shifted.start)}. The same request from there, ending as planned:", WARN),
+                     Line().add("   $ ", DIM).add(shifted.shell())])
+                if ask(f" Submit the request from {fmt_ts(shifted.start)} instead? [y/N] "):
+                    out = oar.submit(app.remote, shifted)
+                    if not out.ok:
+                        say(_refusal_lines(out))
+            if not out.ok:
+                outcomes.append(out)
+                failures += 1
+                continue
+            req = out.request
+        outcomes.append(out)
         oar.read_back(app.remote, out)
         say(verify.outcome_lines(out, it, live, now, app.width))
         # later requests of the same plan must see what this one takes
@@ -589,7 +607,7 @@ def cmd_book(app: App, args) -> int:
     if not args.yes and not confirm(f" Submit {n} job{'s' if n > 1 else ''}? [y/N] "):
         print(" Nothing submitted.")
         return 1
-    failures, outcomes = run_plan(app, pl)
+    failures, outcomes = run_plan(app, pl, ask=(lambda question: True) if args.yes else None)
     if any(o.ok for o in outcomes):
         verify.after(app, [o for o in outcomes if o.ok])
         remember(app, outcomes)
@@ -669,7 +687,7 @@ def cmd_extend(app: App, args) -> int:
         node = snap.node(j.nodes[0]) if j.nodes else None
         free_until = taken_from = None  # the last second OAR allows (its gap included), and when the next job starts
         if node is not None:  # what comes next on the node
-            nxt = [b for b in node.busy(now, skip_job=r.job_id) if b[0] + OAR_GAP >= r.end - 60]
+            nxt = [b for b in node.busy(now, skip_job=r.job_id) if b[0] + node.gap >= r.end - 60]
             if nxt:
                 first = min(nxt, key=lambda b: b[0])
                 free_until, taken_from = first[0], first[2].start
