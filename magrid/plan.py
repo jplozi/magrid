@@ -232,6 +232,17 @@ def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, no
         types = job_types(c, cfg.types_for("default"))
         hosts = want.hosts if want.hosts else []
         extra_notes = []
+        among: list[str] = []
+        if floating and not hosts:
+            # OAR may place a reservation on a powered-off node and wake it up, which can fail (2026-11-03: a
+            # reservation on paradoxe sat on a node that never came up, and the weekly check counted it as
+            # crossing 19:00). When enough nodes are up, the request names them.
+            fit = list(dict.fromkeys(x.node.name for x in offer.windows if x.start and x.start <= w.start and x.until >= w.end))
+            up = [n for n in fit if c.node(n) is not None and c.node(n).hard == "alive"]
+            if k <= len(up) < len(fit):  # some free nodes are not up: keep OAR to the others
+                among = up
+                extra_notes.append(f"restricted to the {len(up)} nodes that are up now: OAR could otherwise place the job "
+                                   f"on a powered-off node, whose wake-up can fail")  # fmt: skip
         if floating and any(n.hard != "alive" for n in w.nodes):
             off = [n.name for n in w.nodes if n.hard != "alive"]
             extra_notes.append(f"{', '.join(off)} {'is' if len(off) == 1 else 'are'} powered off or rebooting: OAR starts "
@@ -243,7 +254,7 @@ def _reserve(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, no
             req = Request(
                 site=c.site, cluster=c.name, nodes=(1 if split else k), queue="default", types=types,
                 start=start, walltime=w.end - start, hosts=(per[i] if per else hosts), avoid=([] if hosts else avoid),
-                verdict=verdict, notes=avail.explain_window(w, c, now) + extra_notes,
+                among=among, verdict=verdict, notes=avail.explain_window(w, c, now) + extra_notes,
             )  # fmt: skip
             plan.items.append(Planned(req, c, w, floating, cores=req.nodes * c.cores_per_node, offer=offer))
         if w.start - now >= 3600:

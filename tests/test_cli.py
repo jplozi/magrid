@@ -197,7 +197,9 @@ class CommandLine(Offline):
         self.assertEqual(rc, 0, out)
         subs = self.subs()
         self.assertEqual([s for s, _ in subs], ["grenoble", "luxembourg", "nancy"])
-        self.assertEqual(subs[0][1][-3:], ["2026-10-05 13:12:00", "-l", "{cluster='yeti'}/nodes=1,walltime=5:43:00"])
+        # yeti-1 and yeti-4 are in standby in the recorded state: an immediate reservation names the node that is up
+        self.assertEqual(subs[0][1][-3:], ["2026-10-05 13:12:00", "-l", "{host in ('yeti-2.grenoble.grid5000.fr')}/nodes=1,walltime=5:43:00"])
+        self.assertIn("among the 1 node up now", out)
         self.assertEqual(subs[2][1][:5], ["oarsub", "-q", "abaca", "-t", "deploy"])
 
     def test_refusal_by_oar_is_shown(self):

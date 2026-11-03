@@ -22,6 +22,12 @@ def request(**kw):
 
 
 class Commands(unittest.TestCase):
+    def test_nodes_up_now(self):
+        r = request(among=["yeti-1", "yeti-3"], avoid=["yeti-4"])
+        self.assertEqual(r.argv()[-1], "{host in ('yeti-1.grenoble.grid5000.fr','yeti-3.grenoble.grid5000.fr')}/nodes=1,walltime=1:00:00")
+        r = request(hosts=["yeti-2"], among=["yeti-1", "yeti-3"])  # a node named on purpose wins
+        self.assertEqual(r.argv()[-1], "{host in ('yeti-2.grenoble.grid5000.fr')}/nodes=1,walltime=1:00:00")
+
     def test_avoided_nodes(self):
         r = request(avoid=["yeti-4"])
         self.assertEqual(r.argv()[-1], "{cluster='yeti' AND host not in ('yeti-4.grenoble.grid5000.fr')}/nodes=1,walltime=1:00:00")

@@ -32,6 +32,7 @@ class Request:
     start: Optional[int] = None  # advance reservation, None for a queued job
     hosts: list[str] = field(default_factory=list)  # restrict to these nodes (short names)
     avoid: list[str] = field(default_factory=list)  # never these nodes (short names), moot when hosts are named
+    among: list[str] = field(default_factory=list)  # any of these nodes: the ones up now, for an immediate start
     command: str = ""
     name: str = ""
     verdict: Optional[Verdict] = None
@@ -50,6 +51,8 @@ class Request:
     def _where(self) -> str:
         if self.hosts:
             return f"host in ({self._names(self.hosts)})"
+        if self.among:
+            return f"host in ({self._names(self.among)})"
         where = f"cluster='{self.cluster}'"
         if self.avoid:
             where += f" AND host not in ({self._names(self.avoid)})"

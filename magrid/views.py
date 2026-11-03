@@ -141,7 +141,8 @@ def jobs_view(snap: Snapshot, findings: list[audit.Finding], width: int, title: 
         if tag:
             ln.add(f"  {tag}", DIM)
         if r.job_id in bad:
-            ln.add("  ! will be flagged" if not bad[r.job_id].already else "  ! flagged", BADB)
+            f = bad[r.job_id]
+            ln.add(f"  ! stuck on {f.stuck}" if f.stuck else ("  ! flagged" if f.already else "  ! will be flagged"), BADB)
         out.append(ln.clip(width))
     return out
 
@@ -742,6 +743,8 @@ def plan_view(pl: Plan, now: int, width: int, *, dry: bool = False) -> list[Line
             head.add("   " + ", ".join(r.hosts), MINE)
         elif it.window and it.window.nodes:
             head.add("   likely " + ", ".join(n.name for n in it.window.nodes[: r.nodes]), DIM)
+        if r.among:
+            head.add(f"   among the {len(r.among)} node{'s' if len(r.among) > 1 else ''} up now", DIM)
         if r.avoid:
             head.add("   not " + ", ".join(r.avoid), DIM)
         out.append(head.clip(width))

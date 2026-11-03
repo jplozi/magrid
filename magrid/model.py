@@ -194,6 +194,9 @@ class Cluster:
         """default: day and night rules apply. abaca: production cluster, priority queues."""
         return "default" if "default" in self.queues else "abaca"
 
+    def node(self, name: str) -> Optional["Node"]:
+        return next((n for n in self.nodes if n.name == name), None)
+
     @property
     def usable_nodes(self) -> list[Node]:
         return [n for n in self.nodes if n.usable]

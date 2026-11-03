@@ -123,6 +123,12 @@ the frontend's clock, with a few seconds of margin on the conditions that
 depend on the submission time. Reservations use `oarsub -r` even when they
 start immediately, because the end of a reservation is fixed by OAR (a late
 start shortens the walltime), whereas a queued job's end moves with its start.
+A reservation starting now names the nodes that are up, when enough of them
+are free, so that OAR does not place it on a powered-off node whose wake-up
+may fail. A waiting reservation placed on a node that has since died is
+reported on the board and by `magrid jobs` and `magrid check`, with the
+deletion to do: OAR keeps the node, the job never starts, and the weekly check
+reads OAR's sliding prediction for it as crossing a boundary.
 After submission, the start and walltime recorded by OAR are read back and
 checked, and `usagepolicycheck` is run on the sites concerned.
 

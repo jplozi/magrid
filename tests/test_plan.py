@@ -216,6 +216,26 @@ class ClockGuard(unittest.TestCase):
         self.assertIsNone(plan.finalize(it, snap, T(MON, 17, 0, 6)))
 
 
+class NodesUp(unittest.TestCase):
+    def test_an_immediate_reservation_names_the_nodes_that_are_up(self):
+        # 2026-11-03: OAR put an immediate reservation on a powered-off paradoxe node, whose wake-up failed
+        now = T(MON, 13, 10)
+        snap = platform(now)
+        snap.clusters["yeti"].nodes[1].hard = "standby"
+        r = book(snap, "yeti", When(slot="now")).items[0].request
+        self.assertEqual((r.among, r.hosts), (["yeti-1", "yeti-3", "yeti-4"], []))
+        self.assertIn("host in ('yeti-1.grenoble.grid5000.fr','yeti-3.grenoble.grid5000.fr','yeti-4.grenoble.grid5000.fr')", r.argv()[-1])
+        self.assertTrue(any("nodes that are up now" in n for n in r.notes), r.notes)
+        r = book(snap, "yeti:4", When(slot="now")).items[0].request  # not enough nodes up: no restriction
+        self.assertEqual(r.among, [])
+        self.assertTrue(any("powered off" in n for n in r.notes), r.notes)
+        r = book(snap, "yeti", When(slot="tonight")).items[0].request  # later: the state now says nothing
+        self.assertEqual(r.among, [])
+        self.assertIn("{cluster='yeti'}/nodes=1", r.argv()[-1])
+        r = book(platform(now), "yeti", When(slot="now")).items[0].request  # every node up: nothing to exclude
+        self.assertEqual(r.among, [])
+
+
 class Avoid(unittest.TestCase):
     def test_avoided_nodes_are_never_asked_for(self):
         now = T(MON, 13, 10)

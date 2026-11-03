@@ -23,6 +23,8 @@ class Finding:
     problems: list[str] = field(default_factory=list)
     deadline: Optional[int] = None  # end the job before this to stay clean (None: too late, or no way)
     already: bool = False  # the violation has already happened
+    stuck: str = ""  # a waiting reservation placed on this node, which is not up
+    remedy: str = ""  # what to do about it
 
     @property
     def text(self) -> str:
@@ -118,12 +120,41 @@ def audit(snap: Snapshot, cluster_cores: dict[str, int]) -> list[Finding]:
         if f.problems:
             f.deadline = None if f.already else (min(deadlines) if deadlines else None)
             out.append(f)
+    out += stuck_reservations(snap)
+    return out
+
+
+def stuck_reservations(snap: Snapshot) -> list[Finding]:
+    """Waiting reservations whose start has passed, placed on a node that is not
+    up. OAR keeps the nodes it validated a reservation on: if one died, the job
+    waits for ever, and the weekly check reads OAR's sliding prediction for it,
+    the full walltime from now, which may cross a boundary."""
+    now = snap.now
+    out = []
+    for j in snap.jobs:
+        r = j.resv
+        if r.kind != "R" or r.running or not r.start or r.start > now + 60:
+            continue
+        placed = [n for c in snap.clusters.values() for n in c.nodes if any(x.job_id == r.job_id for x in n.resvs)]
+        down = [n for n in placed if n.hard in ("dead", "suspected") or (n.hard != "alive" and now - r.start > 600)]
+        if not down:
+            continue
+        f = Finding(j, stuck=down[0].name)
+        f.problems.append(f"waiting since {fmt_when(r.start, now)} for " + ", ".join(f"{n.name} ({n.hard})" for n in down))
+        late = _as_checker_job(j)
+        late.start, late.stop, late.walltime = now, now + r.walltime, r.walltime
+        if checker.analyze_job(late).cross_boundaries:
+            f.problems.append("the weekly check reads OAR's prediction for it, the full walltime from now, as crossing a boundary")
+        f.remedy = f"It cannot start there: delete it and book again (magrid del {r.job_id})."
+        out.append(f)
     return out
 
 
 def advice(f: Finding, now: int) -> str:
     r = f.job.resv
     where = f"{f.job.site} job {r.job_id}" + (f" ({', '.join(f.job.nodes)})" if f.job.nodes else "")
+    if f.remedy:
+        return f"{where}: {f.text}. {f.remedy}"
     if f.already:
         return f"{where}: {f.text}. It is past the point where ending it would help."
     if f.deadline:
