@@ -163,14 +163,27 @@ class Marker(unittest.TestCase):
         self.assertEqual(self.cell(snap, "yeti", "tonight", compact=True)[0], "- ●4")
 
     def test_text_gives_way_to_the_marker(self):
-        def m(variants, mark, width=15):
-            marker = term.Line().add(mark, views.MARK_ST["running"]) if mark else term.Line()
-            return views._marked(variants, views.WARN, marker, width, None).text.rstrip()
+        def m(variants, counts, width=15):
+            return views._marked(variants, views.WARN, counts, width, None).text.rstrip()
 
-        self.assertEqual(m(["opens Wed 19:00", "opens Wed"], ""), "opens Wed 19:00")
-        self.assertEqual(m(["opens Wed 19:00", "opens Wed"], "●2"), "opens Wed ●2")
-        self.assertEqual(m(["abcdefghijklmnop"], "●12"), "abcdefghij… ●12")
-        self.assertEqual(len(m(["abcdefghijklmnop"], "●12")), 15)
+        self.assertEqual(m(["opens Wed 19:00", "opens Wed"], {}), "opens Wed 19:00")
+        self.assertEqual(m(["opens Wed 19:00", "opens Wed"], {"running": 2}), "opens Wed ●2")
+        self.assertEqual(m(["abcdefghijklmnop"], {"running": 12}), "abcdefghij… ●12")
+        self.assertEqual(len(m(["abcdefghijklmnop"], {"running": 12})), 15)
+
+    def test_the_marker_shrinks_before_the_text(self):
+        three = {"running": 1, "reserved": 1, "queued": 1}
+        full = views._marked(["3 × 5h44"], views.OKB, three, 15, None)
+        self.assertEqual(full.text.rstrip(), "3 × 5h44 ●1●1●1")  # packed: one marker per state still fits
+        self.assertEqual([st.fg for t, st in full if t.startswith("●")],
+                         [views.MARK_ST[s].fg for s in ("running", "reserved", "queued")])
+        total = views._marked(["3 × 13h55"], views.OKB, three, 15, None)
+        self.assertEqual(total.text.rstrip(), "3 × 13h55 ●3")  # no room: one total, in the mixed colour
+        self.assertEqual([st.fg for t, st in total if t.startswith("●")], [views.MARK_MIXED.fg])
+        two = views._marked(["3 × 13h55"], views.OKB, {"running": 1, "reserved": 1}, 15, None)
+        self.assertEqual(two.text.rstrip(), "3 × 13h55 ●1 ●1")  # exactly fifteen columns
+        self.assertEqual(views._marked(["2 of 3 × 13h55", "2/3 × 13h55"], views.OKB, {"running": 1, "queued": 1}, 15, None).text.rstrip(),
+                         "2/3 × 13h55 ●2")
 
 
 class PlanView(unittest.TestCase):

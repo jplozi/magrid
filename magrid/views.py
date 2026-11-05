@@ -182,6 +182,7 @@ def cluster_label(c: Cluster, snap: Snapshot) -> tuple[Line, Line]:
 
 
 MARK_ST = {"running": OKB, "reserved": St(SKY, bold=True), "queued": WARNB}  # the colours of the job list
+MARK_MIXED = MINE  # one total when a narrow cell has no room for one marker per state
 
 
 def _state_of(r: Resv) -> str:
@@ -199,14 +200,21 @@ def _mine_in(c: Cluster, snap: Snapshot, start: int, end: int) -> dict[str, int]
     return counts
 
 
-def _marker(counts: dict[str, int], bg: Optional[int]) -> Line:
-    """The user's marker in a cell: ●2 per state, in the state's colour."""
+def _marker(counts: dict[str, int], bg: Optional[int], form: str = "full") -> Line:
+    """The user's marker in a cell: ●2 per state, in the state's colour. form:
+    "full" with a space between states, "packed" without, "total" as one
+    figure in the mixed colour (or the state's colour if there is one state)."""
+    present = [s for s in ("running", "reserved", "queued") if counts.get(s)]
     ln = Line()
-    for state in ("running", "reserved", "queued"):
-        if counts.get(state):
-            if ln.width:
-                ln.add(" ", St(bg=bg))
-            ln.add(f"●{counts[state]}", MARK_ST[state].on(bg))
+    if not present:
+        return ln
+    if form == "total" or len(present) == 1:
+        st = MARK_ST[present[0]] if len(present) == 1 else MARK_MIXED
+        return ln.add(f"●{sum(counts[s] for s in present)}", st.on(bg))
+    for s in present:
+        if ln.width and form == "full":
+            ln.add(" ", St(bg=bg))
+        ln.add(f"●{counts[s]}", MARK_ST[s].on(bg))
     return ln
 
 
@@ -237,13 +245,18 @@ def _short_when(ts: int, now: int) -> str:
     return f"{d.day} {d:%b}"
 
 
-def _marked(variants: list[str], st: St, mark: Line, width: int, bg: Optional[int]) -> Line:
+def _marked(variants: list[str], st: St, counts: dict[str, int], width: int, bg: Optional[int]) -> Line:
     """Text and the user's marker (●2, coloured by state) in a cell. The marker
-    always shows: the first text variant that fits beside it is used, else the
-    last one is cut."""
-    room = width - (mark.width + 1 if mark.width else 0)
-    text = next((v for v in variants if len(v) <= room), None)
-    if text is None:
+    always shows, and shrinks before the text does: one marker per state while
+    a text variant fits beside it, then the markers packed, then one total.
+    Only then is the last text variant cut."""
+    for form in ("full", "packed", "total"):
+        mark = _marker(counts, bg, form)
+        room = width - (mark.width + 1 if mark.width else 0)
+        text = next((v for v in variants if len(v) <= room), None)
+        if text is not None:
+            break
+    else:
         text = variants[-1][: max(0, room - 1)] + "…" if room > 1 else ""
     ln = Line().add(text, st.on(bg))
     if mark.width:
@@ -265,7 +278,7 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         return cell("reading…" if offer.cluster.state == "reading" else "not read", width, VDIM.on(bg)), cell("", width, fill)
     w = window or offer.best
     start, end = (w.start, w.end) if w is not None else (offer.slot.start, offer.slot.period.end)
-    mark = _marker(_mine_in(offer.cluster, snap, start, end), bg)
+    mark = _mine_in(offer.cluster, snap, start, end)
     if offer.opens:
         reason, reason_st = [f"opens {fmt_when(offer.opens, now)}", f"opens {_short_when(offer.opens, now)}"], WARN
     else:
@@ -423,6 +436,7 @@ def legend(width: int) -> list[Line]:
         Line().add("●2", MARK_ST["running"]).add(" you run on 2 nodes there", DIM),
         Line().add("●1", MARK_ST["reserved"]).add(" 1 reserved", DIM),
         Line().add("●1", MARK_ST["queued"]).add(" 1 queued", DIM),
+        Line().add("●3", MARK_MIXED).add(" several states, cell too narrow to tell", DIM),
     ]
     out, cur = [], Line().add(" ")
     for part in parts:
