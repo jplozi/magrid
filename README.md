@@ -275,7 +275,9 @@ the frontend of the site concerned, with the exact command printed first.
 ## Limitations
 
 - Start times on production clusters are estimates from the current queue.
-  Jobs of higher priority submitted later are scheduled first.
+  Jobs of higher priority submitted later are scheduled first, and within a
+  queue OAR orders jobs by the fair-share karma of their projects, which
+  magrid does not see: a node shown free is a hint, not a promise.
 - Nodes shown free may be taken between display and submission. OAR then
   refuses the reservation, which magrid reports.
 - Predicted slots of queued jobs in the default queue are treated as busy,

@@ -37,6 +37,33 @@ class Recording(unittest.TestCase):
         self.assertEqual(self.snap.quota("yeti").limit, 512 * 3600)
         self.assertEqual(len(self.snap.flagged), 2)
 
+    def test_a_queued_job_is_attributed_to_its_cluster(self):
+        # 2026-11-05: a queued p3 job on grosminet had no node yet, so the board's grosminet line did not count it
+        self.assertEqual(fetch.cluster_of_properties("(((cluster='grosminet') AND nodeset in ('x')) AND deploy = 'YES')"), "grosminet")
+        self.assertEqual(fetch.cluster_of_properties("(deploy = 'YES') AND maintenance = 'NO'"), "")
+        import copy
+        import json
+
+        from magrid import avail, term, views
+
+        ref, values, files = fetch.load_recording(FIXTURE)
+        jobs = json.loads(files["jobs_nancy"])
+        queued = copy.deepcopy(jobs["items"][0])
+        queued.update({"uid": 7000009, "state": "waiting", "queue": "p3", "walltime": 86400, "started_at": 0, "scheduled_at": 0,
+                       "properties": "(((cluster='grdix') AND nodeset in ('grdix')) AND deploy = 'YES') AND maintenance = 'NO'",
+                       "message": "Cannot find enough resources for job 7000009 yet", "events": [], "assigned_nodes": []})  # fmt: skip
+        jobs["items"].append(queued)
+        files["jobs_nancy"] = json.dumps(jobs).encode()
+        snap = fetch.build_snapshot(values, files, ref, CLUSTERS)
+        j = next(j for j in snap.jobs if j.job_id == 7000009)
+        self.assertEqual((j.nodes, j.clusters), ([], {"grdix": 0}))
+        slot = avail.slots(snap.now)[0]
+        o = avail.offer_for(snap, snap.clusters["grdix"], slot, margin=300, besteffort_walltime=48 * 3600)
+        l1, _ = views.queue_cell(o, snap, 90)
+        self.assertIn("●3", term.ansi(l1, color=False))  # the two running grdix jobs of the recording, and the queued one
+        rows = [term.ansi(ln, color=False) for ln in views.jobs_view(snap, [], 120)]
+        self.assertTrue(any("7000009" in r and "grdix" in r and "queued" in r for r in rows), rows)
+
     def test_my_jobs(self):
         jobs = {j.job_id: j for j in self.snap.jobs}
         self.assertEqual(sorted(j.nodes[0] for j in jobs.values()), ["chicoree-1", "grdix-4", "grdix-7", "roazhon15-1"])

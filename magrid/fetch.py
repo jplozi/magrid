@@ -316,6 +316,16 @@ def load_history(remote: Remote, cfg: Config, ref: Reference, *, refresh: bool =
 # State
 
 
+_CLUSTER_PROPERTY = re.compile(r"cluster\s*=\s*'([^']+)'")
+
+
+def cluster_of_properties(properties: str) -> str:
+    """The cluster named in a job's OAR properties, such as
+    "(((cluster='grosminet') AND nodeset in (...)) AND deploy = 'YES')", or ""."""
+    m = _CLUSTER_PROPERTY.search(properties)
+    return m.group(1) if m else ""
+
+
 def _split_node(fqdn: str) -> tuple[str, str]:
     name = fqdn.split(".")[0]
     return name, name.rsplit("-", 1)[0]
@@ -534,6 +544,10 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
                             rr = resv_from_api(r)
                             job.resv.start = rr.start
             job.nodes.sort(key=lambda n: (n.rsplit("-", 1)[0], int(n.rsplit("-", 1)[-1]) if n.rsplit("-", 1)[-1].isdigit() else 0))
+            if not job.nodes:  # queued, no node yet: the cluster is in the request's properties
+                cname = cluster_of_properties(it.get("properties") or "")
+                if cname:
+                    job.clusters.setdefault(cname, 0)
             snap.jobs.append(job)
     snap.jobs.sort(key=lambda j: (j.resv.start or 10**12, j.site, j.job_id))
 
