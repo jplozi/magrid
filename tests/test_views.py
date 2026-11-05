@@ -106,9 +106,31 @@ class NamedNodes(unittest.TestCase):
 
 
 class Marker(unittest.TestCase):
-    """The ●N of nodes you already hold stays visible in every kind of cell."""
+    """The ●N of nodes you already hold stays visible in every kind of cell, in the colour of the job's state."""
 
     now = T(MON, 13, 10)
+
+    def test_one_marker_per_state_in_its_colour(self):
+        running = resv("me", T(MON, 9), T(MON, 15), now=self.now)  # on yeti-1, then a reservation on the same node
+        later = resv("me", T(MON, 15, 30), T(MON, 18, 55), now=self.now)
+        snap = platform(self.now, yeti={"busy": {1: [running, later]}},
+                        jobs=[my_job("grenoble", running, ["yeti-1"], {"yeti": 64}), my_job("grenoble", later, ["yeti-1"], {"yeti": 64})])
+        slot = avail.find_slot(avail.slots(self.now), "now")
+        o = avail.offer_for(snap, snap.clusters["yeti"], slot, margin=300, besteffort_walltime=48 * H)
+        l1, _ = views.offer_cell(o, snap, views.CELL_W - 1)
+        self.assertEqual(term.ansi(l1, color=False), "3 × 5h44 ●1 ●1")
+        marks = [(text, st.fg) for text, st in l1 if text.startswith("●")]
+        self.assertEqual(marks, [("●1", views.MARK_ST["running"].fg), ("●1", views.MARK_ST["reserved"].fg)])
+        # a queued cluster: running nodes and queued jobs apart
+        q = resv("me", T(MON, 9), T(TUE, 9), queue="p3", kind="B", now=self.now)
+        waiting = resv("me", 0, 0, queue="p3", kind="B", state="waiting")
+        waiting.walltime = 86400
+        snap = platform(self.now, grdix={"busy": {1: [q]}},
+                        jobs=[my_job("nancy", q, ["grdix-1"], {"grdix": 256}), my_job("nancy", waiting, [], {"grdix": 0})])
+        o = avail.offer_for(snap, snap.clusters["grdix"], slot, margin=300, besteffort_walltime=48 * H)
+        l1, _ = views.queue_cell(o, snap, 90)
+        marks = [(text, st.fg) for text, st in l1 if text.startswith("●")]
+        self.assertEqual(marks, [("●1", views.MARK_ST["running"].fg), ("●1", views.MARK_ST["queued"].fg)])
 
     def cell(self, snap, cname, slot_name, **kw):
         slot = avail.find_slot(avail.slots(snap.now), slot_name)
@@ -142,7 +164,8 @@ class Marker(unittest.TestCase):
 
     def test_text_gives_way_to_the_marker(self):
         def m(variants, mark, width=15):
-            return views._marked(variants, views.WARN, mark, width, None).text.rstrip()
+            marker = term.Line().add(mark, views.MARK_ST["running"]) if mark else term.Line()
+            return views._marked(variants, views.WARN, marker, width, None).text.rstrip()
 
         self.assertEqual(m(["opens Wed 19:00", "opens Wed"], ""), "opens Wed 19:00")
         self.assertEqual(m(["opens Wed 19:00", "opens Wed"], "●2"), "opens Wed ●2")

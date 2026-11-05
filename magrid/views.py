@@ -181,13 +181,33 @@ def cluster_label(c: Cluster, snap: Snapshot) -> tuple[Line, Line]:
     return l1.clip(NAME_W).pad(NAME_W), l2.clip(NAME_W).pad(NAME_W)
 
 
-def _mine_in(c: Cluster, snap: Snapshot, start: int, end: int) -> int:
-    """How many nodes of the cluster the user already holds during a window."""
-    n = 0
+MARK_ST = {"running": OKB, "reserved": St(SKY, bold=True), "queued": WARNB}  # the colours of the job list
+
+
+def _state_of(r: Resv) -> str:
+    return "running" if r.running else "reserved" if r.kind == "R" else "queued"
+
+
+def _mine_in(c: Cluster, snap: Snapshot, start: int, end: int) -> dict[str, int]:
+    """How many nodes of the cluster the user holds during a window, per state
+    of the job: running, reserved (not started yet), queued."""
+    counts = {"running": 0, "reserved": 0, "queued": 0}
     for node in c.nodes:
-        if any(r.user == snap.me and r.start and r.start < end and r.end > start for r in node.resvs):
-            n += 1
-    return n
+        states = {_state_of(r) for r in node.resvs if r.user == snap.me and r.start and r.start < end and r.end > start}
+        for s in states:
+            counts[s] += 1
+    return counts
+
+
+def _marker(counts: dict[str, int], bg: Optional[int]) -> Line:
+    """The user's marker in a cell: ●2 per state, in the state's colour."""
+    ln = Line()
+    for state in ("running", "reserved", "queued"):
+        if counts.get(state):
+            if ln.width:
+                ln.add(" ", St(bg=bg))
+            ln.add(f"●{counts[state]}", MARK_ST[state].on(bg))
+    return ln
 
 
 def slot_header(slot: Slot, now: int, margin: int) -> tuple[str, str]:
@@ -217,16 +237,17 @@ def _short_when(ts: int, now: int) -> str:
     return f"{d.day} {d:%b}"
 
 
-def _marked(variants: list[str], st: St, mark: str, width: int, bg: Optional[int]) -> Line:
-    """Text and the user's marker (●2) in a cell. The marker always shows: the
-    first text variant that fits beside it is used, else the last one is cut."""
-    room = width - (len(mark) + 1 if mark else 0)
+def _marked(variants: list[str], st: St, mark: Line, width: int, bg: Optional[int]) -> Line:
+    """Text and the user's marker (●2, coloured by state) in a cell. The marker
+    always shows: the first text variant that fits beside it is used, else the
+    last one is cut."""
+    room = width - (mark.width + 1 if mark.width else 0)
     text = next((v for v in variants if len(v) <= room), None)
     if text is None:
         text = variants[-1][: max(0, room - 1)] + "…" if room > 1 else ""
     ln = Line().add(text, st.on(bg))
-    if mark:
-        ln.add(" ", St(bg=bg)).add(mark, MINE.on(bg))
+    if mark.width:
+        ln.add(" ", St(bg=bg)).extend_line(mark)
     return ln.clip(width).pad(width, St(bg=bg))
 
 
@@ -244,8 +265,7 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         return cell("reading…" if offer.cluster.state == "reading" else "not read", width, VDIM.on(bg)), cell("", width, fill)
     w = window or offer.best
     start, end = (w.start, w.end) if w is not None else (offer.slot.start, offer.slot.period.end)
-    mine = _mine_in(offer.cluster, snap, start, end)
-    mark = f"●{mine}" if mine else ""
+    mark = _marker(_mine_in(offer.cluster, snap, start, end), bg)
     if offer.opens:
         reason, reason_st = [f"opens {fmt_when(offer.opens, now)}", f"opens {_short_when(offer.opens, now)}"], WARN
     else:
@@ -307,7 +327,10 @@ def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         l1.add(f"est. start {fmt_when(first, now)}", WARNB.on(bg))
     mine = [j for j in snap.jobs if offer.cluster.name in j.clusters]
     if mine:
-        l1.add(f"  ●{sum(len(j.nodes) or 1 for j in mine)}", MINE.on(bg))
+        counts = {"running": 0, "reserved": 0, "queued": 0}
+        for j in mine:
+            counts[_state_of(j.resv)] += len(j.nodes) or 1
+        l1.add("  ", St(bg=bg)).extend_line(_marker(counts, bg))
     l2 = Line()
     if offer.blocked:
         l2.add(offer.blocked, BAD.on(bg))
@@ -397,7 +420,9 @@ def legend(width: int) -> list[Line]:
     parts = [
         Line().add(f"3 {TIMES} 5h44", OKB).add(" 3 nodes free for 5h44", DIM),
         Line().add(f"3 {TIMES} 2h44", WARNB).add(" cut short by the quota or by a later reservation", DIM),
-        Line().add("●2", MINE).add(" you already hold 2 there", DIM),
+        Line().add("●2", MARK_ST["running"]).add(" you run on 2 nodes there", DIM),
+        Line().add("●1", MARK_ST["reserved"]).add(" 1 reserved", DIM),
+        Line().add("●1", MARK_ST["queued"]).add(" 1 queued", DIM),
     ]
     out, cur = [], Line().add(" ")
     for part in parts:

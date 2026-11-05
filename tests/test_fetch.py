@@ -60,7 +60,7 @@ class Recording(unittest.TestCase):
         slot = avail.slots(snap.now)[0]
         o = avail.offer_for(snap, snap.clusters["grdix"], slot, margin=300, besteffort_walltime=48 * 3600)
         l1, _ = views.queue_cell(o, snap, 90)
-        self.assertIn("●3", term.ansi(l1, color=False))  # the two running grdix jobs of the recording, and the queued one
+        self.assertIn("●2 ●1", term.ansi(l1, color=False))  # the two running grdix jobs of the recording, and the queued one
         rows = [term.ansi(ln, color=False) for ln in views.jobs_view(snap, [], 120)]
         self.assertTrue(any("7000009" in r and "grdix" in r and "queued" in r for r in rows), rows)
 
