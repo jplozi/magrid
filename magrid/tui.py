@@ -21,7 +21,7 @@ from typing import Optional
 from . import avail, fetch, oar, plan, policy, selection, verify, views
 from .model import Snapshot
 from .remote import RemoteError
-from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, emit, line, text_colour, wrap
+from .term import DIM, HEAD, OKB, PLAIN, WARN, Line, St, drop_typed_ahead, emit, line, text_colour, wrap
 from .timefmt import fmt_dur, fmt_ts, fmt_when
 
 REFRESH_EVERY = 60  # seconds
@@ -604,17 +604,20 @@ class Board:
         """Run something on the normal screen, then come back."""
         curses.def_prog_mode()
         curses.endwin()
+        drop_typed_ahead()  # keys pressed while the screen switched must not answer the prompt
         try:
             action()
         except (RemoteError, fetch.FetchError, plan.PlanError) as e:
             print(f"\n magrid: {e}")
         except KeyboardInterrupt:
             print("\n interrupted")
+        drop_typed_ahead()  # nor keys pressed while the submission ran
         try:
             input("\n Press Enter to go back to the board. ")
         except (EOFError, KeyboardInterrupt):
             pass
         curses.reset_prog_mode()
+        curses.flushinp()  # what was typed meanwhile does not reach the board
         self.scr.clear()
         self.loaded_at = 0  # force a refresh
         self.refresh_async(quota=True)

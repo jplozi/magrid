@@ -15,7 +15,7 @@ from typing import Optional
 from . import __version__, audit, avail, config, fetch, oar, plan, policy, selection, verify, views
 from .model import Snapshot
 from .remote import Remote, RemoteError
-from .term import BAD, BADB, DIM, HEAD, OK, OKB, PLAIN, TITLE, WARN, Line, emit, line, set_theme, term_width, use_color, wrap
+from .term import BAD, BADB, DIM, HEAD, OK, OKB, PLAIN, TITLE, WARN, Line, drop_typed_ahead, emit, line, set_theme, term_width, use_color, wrap
 from .timefmt import TimeError, fmt_dur, fmt_ts, fmt_when, parse_duration, parse_time
 
 
@@ -455,6 +455,7 @@ def _when(args, now: int) -> plan.When:
 
 
 def confirm(question: str) -> bool:
+    drop_typed_ahead()
     try:
         return input(question).strip().lower() in ("y", "yes", "o", "oui")
     except (EOFError, KeyboardInterrupt):
@@ -494,6 +495,7 @@ def run_plan(app: App, pl: plan.Plan, *, say=None, ask=None) -> tuple[int, list[
             say([Line().add(" ✘ ", BADB).add(f"not submitted: {problem}", BAD)])
             failures += 1
             continue
+        say([line(f" submitting to {req.site}…", DIM)])
         out = oar.submit(app.remote, req)
         if not out.ok:
             say(_refusal_lines(out))

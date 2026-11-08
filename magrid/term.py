@@ -201,6 +201,18 @@ def emit(lines: Iterable[Line], stream=None, color: Optional[bool] = None) -> No
     stream.write("\n".join(ansi(ln, color) for ln in lines) + "\n")
 
 
+def drop_typed_ahead() -> None:
+    """Discard the keys typed before a prompt appears (while the screen switches
+    or a submission runs), so that they cannot answer it. Terminals only."""
+    try:
+        import termios
+
+        if sys.stdin.isatty():
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def term_width(default: int = 100) -> int:
     try:
         return max(60, shutil.get_terminal_size((default, 24)).columns)

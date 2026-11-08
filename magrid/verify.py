@@ -99,6 +99,7 @@ def after(app, outcomes: list[Outcome]) -> None:
     with the official checker's eyes."""
     import time
 
+    app.out([line(" reading the platform again and running usagepolicycheck on the new jobs (up to 20 s)…", DIM)])
     time.sleep(2)  # let the scheduler record the new jobs
     ids = {str(o.job_id) for o in outcomes}
     clusters = []
