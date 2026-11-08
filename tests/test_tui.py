@@ -89,5 +89,42 @@ class NodePicker(Offline):
         self.assertIn("\navoid =\n", config.config_path().read_text())
 
 
+class StrayKeys(Offline):
+    """A key that arrives twice, or on a stale list, must not act twice."""
+
+    def setUp(self):
+        super().setUp()
+        args = cli.build_parser().parse_args(["--width", "120", "--no-color", "tui"])
+        self.app = cli.App(args)
+        cli._known_clusters(self.app)
+        self.app.history_later = True
+        self.app.load(self.app.board())
+        self.scr = FakeStdscr()
+        self.board = tui.Board(self.app, self.scr)
+
+    def test_a_choice_can_be_undone_and_the_status_says_how(self):
+        b = self.board
+        b.row = [c.name for c in b.clusters].index("yeti")
+        b.key(ord(" "))
+        self.assertEqual(list(b.picks.values()), [1])
+        b.draw()
+        self.assertIn("Space or 0 unchooses", self.scr.text())
+        b.key(ord(" "))  # toggles back
+        self.assertEqual(b.picks, {})
+        b.key(ord("2"))
+        b.key(ord("0"))
+        self.assertEqual(b.picks, {})
+
+    def test_a_job_being_deleted_is_marked_and_not_deleted_again(self):
+        b = self.board
+        b.key(ord("j"))
+        jid = b.snap.jobs[b.job_row].job_id
+        b.deleting.add(jid)  # what a successful oardel records
+        b.draw()
+        self.assertIn("deleting…", self.scr.text())
+        b.key(ord("d"))  # would raise outside curses if it reached the prompt
+        self.assertIn("deletion is registered", b.message)
+
+
 if __name__ == "__main__":
     unittest.main()

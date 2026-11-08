@@ -106,9 +106,13 @@ def _job_state(j: MyJob, now: int) -> tuple[str, St]:
     return "queued", WARN
 
 
-def jobs_view(snap: Snapshot, findings: list[audit.Finding], width: int, title: bool = True) -> list[Line]:
+def jobs_view(snap: Snapshot, findings: list[audit.Finding], width: int, title: bool = True,
+              deleting: Optional[set[int]] = None) -> list[Line]:  # fmt: skip
+    """The user's jobs. deleting: jobs whose deletion was just registered and
+    that the platform still lists."""
     now = snap.now
     bad = {f.job.job_id: f for f in findings}
+    deleting = deleting or set()
     out = []
     if title:
         out.append(line(" YOUR JOBS", HEAD))
@@ -120,6 +124,8 @@ def jobs_view(snap: Snapshot, findings: list[audit.Finding], width: int, title: 
     for j in snap.jobs:
         r = j.resv
         state, st = _job_state(j, now)
+        if r.job_id in deleting:
+            state, st = "deleting…", WARN
         ln = Line().add("   ")
         ln.extend_line(cell(str(r.job_id), 9, HEAD))
         ln.extend_line(cell(j.site, 11, DIM))
@@ -140,7 +146,7 @@ def jobs_view(snap: Snapshot, findings: list[audit.Finding], width: int, title: 
         tag = r.queue if r.queue != "default" else ""
         if tag:
             ln.add(f"  {tag}", DIM)
-        if r.job_id in bad:
+        if r.job_id in bad and r.job_id not in deleting:
             f = bad[r.job_id]
             ln.add(f"  ! stuck on {f.stuck}" if f.stuck else ("  ! flagged" if f.already else "  ! will be flagged"), BADB)
         out.append(ln.clip(width))

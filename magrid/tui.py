@@ -44,7 +44,8 @@ HELP = """\
    + or =            one more node in the focused cell      -   one less
    m                 as many as possible                    0   none
    1 to 9            that many nodes
-   Enter or b        review the exact commands, then book
+   Enter or b        review the exact commands, then book (one node of the focused cell
+                     when nothing is chosen)
    c                 clear all choices
    a                 add a cluster to the board: type to search (arm, lyon, gpu, epyc, ...)
    x                 hide the focused cluster from the board (a brings it back)
@@ -146,6 +147,7 @@ class Board:
         self.col = 0
         self.picks: dict[tuple[str, str], int] = {}
         self.named: dict[tuple[str, str], list[str]] = {}  # cells whose nodes were picked by name
+        self.deleting: set[int] = set()  # jobs whose deletion OAR registered, until a reading no longer lists them
         self.node_pick: Optional[NodePick] = None
         self.pane = "detail"  # detail, gantt, jobs, help
         self.job_row = 0
@@ -297,6 +299,7 @@ class Board:
                 self.refresh_async()
             self.app.snap = self.snap = snap
             self.app.offset = time.time() - snap.now
+            self.deleting &= {j.job_id for j in snap.jobs}
             self.recompute()
             name, self.pending_focus = self.pending_focus, None
             if name and name in [c.name for c in self.clusters]:
@@ -554,7 +557,7 @@ class Board:
             self.screen.put(y, line("   none", DIM))
             return y + 1
         self.job_row = max(0, min(self.job_row, len(snap.jobs) - 1))
-        rows = views.jobs_view(snap, self.findings, self.width - 2, title=False)
+        rows = views.jobs_view(snap, self.findings, self.width - 2, title=False, deleting=self.deleting)
         for i, ln in enumerate(rows):
             mark = Line().add(" ▸" if i == self.job_row else "  ", OKB)
             self.screen.put(y, mark.extend_line(ln))
@@ -590,6 +593,7 @@ class Board:
             left.add("↑↓ move · Space picks the node · x avoids it for good (x again allows it) · Enter or n back", OKB)
         elif picked:
             left.add(f"{picked} node{'s' if picked > 1 else ''} chosen in {len(self.picks)} cell{'s' if len(self.picks) > 1 else ''}: Enter to review and book", OKB)
+            left.add("  · Space or 0 unchooses, c clears all", DIM)
         else:
             right_w = len(state) + (19 if self.short else 0) + 3
             left.add(next((k for k in (KEYS, KEYS_SHORT) if len(k) + right_w < self.width), KEYS_TINY), DIM)
@@ -624,7 +628,7 @@ class Board:
 
     def book(self) -> None:
         picks = dict(self.picks)
-        if not picks:
+        if not picks:  # one node of the focused cell
             key = self.focus_key()
             o = self.offers.get(key) if key else None
             if o is None or not o.bookable:
@@ -671,6 +675,9 @@ class Board:
         if not snap.jobs:
             return
         j = snap.jobs[self.job_row]
+        if j.job_id in self.deleting:
+            self.say(f"job {j.job_id}: its deletion is registered, the list follows at the next reading", WARN)
+            return
         app = self.app
 
         def action():
@@ -686,6 +693,8 @@ class Board:
                     return
                 ok, text = oar.delete(app.remote, j.site, r.job_id)
                 print((" ✔ " if ok else " ✘ ") + text.replace("\n", " "))
+                if ok:
+                    self.deleting.add(r.job_id)
                 return
             if not (r.running and r.queue == "default" and not r.besteffort and j.clusters):
                 print(" Only running jobs of the default queue can be extended here (see: magrid extend).")
