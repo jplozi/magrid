@@ -479,9 +479,8 @@ def run_plan(app: App, pl: plan.Plan, *, say=None, ask=None) -> tuple[int, list[
     Returns (failures, outcomes)."""
     say = say or (lambda lines: app.out(lines))
     ask = ask or confirm
-    snap = app.snap
-    if app.now() - snap.now > 120:  # the picture is getting old: look again before committing
-        snap = app.load(list(dict.fromkeys(it.cluster.name for it in pl.items)), job_nodes=False)
+    # look again before committing: the board's quota figure may be minutes old
+    snap = app.load(list(dict.fromkeys(it.cluster.name for it in pl.items)), job_nodes=False)
     live = copy.copy(snap)
     live.quotas = copy.deepcopy(snap.quotas)
     live.jobs = list(snap.jobs)

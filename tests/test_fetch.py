@@ -37,6 +37,27 @@ class Recording(unittest.TestCase):
         self.assertEqual(self.snap.quota("yeti").limit, 512 * 3600)
         self.assertEqual(len(self.snap.flagged), 2)
 
+    def test_the_users_own_jobs_count_even_when_the_official_figure_lags(self):
+        # 2026-11-09: a second dahu reservation was planned while the official figure did not yet count
+        # the first one, which took the whole day's allowance
+        import json
+
+        ref, values, files = fetch.load_recording(FIXTURE)
+        raw = files["quota"].decode()
+        line = next(ln for ln in reversed(raw.splitlines()) if ln.startswith("{"))
+        d = json.loads(line)
+        d["limits"]["lille"] = {"chicoree": {"time": 7200 * 64, "nb_cores": 64}}
+        d["total_jobs"]["jdoe"].setdefault("2026-10-05", {}).setdefault("lille", {})["chicoree"] = {
+            "total_cputime": 0, "extra_cputime": 0, "restricted_cputime": 0, "jobs": [], "max_walltime_jobs": [],
+            "max_walltime": 0, "cross_boundaries_jobs": [], "rate": 0, "extra_rate": 0}  # fmt: skip
+        files["quota"] = json.dumps(d).encode()
+        snap = fetch.build_snapshot(values, files, ref, ["chicoree", "yeti"])
+        q = snap.quota("chicoree")
+        own = fetch._visible_usage(snap)["chicoree"][dt.date(2026, 10, 5)]  # the job on chicoree-1, 13:00 to 19:00
+        self.assertTrue(q.known)
+        self.assertEqual(q.used[dt.date(2026, 10, 5)], own)
+        self.assertGreater(own, 0)
+
     def test_a_queued_job_is_attributed_to_its_cluster(self):
         # 2026-11-05: a queued p3 job on grosminet had no node yet, so the board's grosminet line did not count it
         self.assertEqual(fetch.cluster_of_properties("(((cluster='grosminet') AND nodeset in ('x')) AND deploy = 'YES')"), "grosminet")

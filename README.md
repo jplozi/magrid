@@ -94,7 +94,9 @@ reservations 5 minutes before a boundary.
 **Data.** One ssh connection to a frontend provides, through the Grid'5000
 REST API, the status of every node of the sites concerned, with the running
 and scheduled jobs on each, and the user's jobs on all sites. The daytime
-already consumed on each cluster is taken from `usagepolicycheck` itself.
+already consumed on each cluster is taken from `usagepolicycheck` itself, and
+is never counted lower than what the user's own jobs in the same reading add
+up to, since that figure can be minutes old.
 Cluster descriptions, the user's group and privilege level, and the group's
 priorities on production clusters are read once a week, and the list of clusters
 recently used, once a day from the OAR databases (public read-only account).
@@ -118,8 +120,8 @@ minute OAR names. Every candidate window is checked twice: against the written r
 tolerance (`magrid/policy.py`), and against a port of `usagepolicycheck`
 (`magrid/checker.py`). A window is offered only if both accept it.
 
-**Submission.** At the moment of submission the window is checked again with
-the frontend's clock, with a few seconds of margin on the conditions that
+**Submission.** At the moment of submission the platform is read again and
+the window is checked again with the frontend's clock, with a few seconds of margin on the conditions that
 depend on the submission time. Reservations use `oarsub -r` even when they
 start immediately, because the end of a reservation is fixed by OAR (a late
 start shortens the walltime), whereas a queued job's end moves with its start.

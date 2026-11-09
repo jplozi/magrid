@@ -564,7 +564,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             where = f"{site}: " if site else ""
             snap.problems.append(f"{where}usagepolicycheck gave no answer (in {QUOTA_TIMEOUT} s). Your daytime use there today "
                                  f"is counted from the jobs magrid can see")  # fmt: skip
-    seen: Optional[dict] = None
+    seen = _visible_usage(snap)
     for cname, c in snap.clusters.items():
         if c.kind != "default":
             continue
@@ -574,10 +574,15 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             snap.quotas[cname] = copy.deepcopy(previous.quotas[cname])  # read a few minutes ago: still right
         else:
             # usagepolicycheck gave nothing: count at least the user's jobs that are still visible
-            if seen is None:
-                seen = _visible_usage(snap)
             snap.quotas[cname] = policy.Quota(c.quota_cores, dict(seen.get(cname, {})), known=False)
-        snap.quotas[cname].node_cores = c.cores_per_node
+        # the official figure may be minutes old, and the user's own jobs are in this very reading: a
+        # day's usage is never less than what those jobs add up to (2026-11-09: a second reservation was
+        # planned on dahu while the first one, which took the whole day's allowance, was not yet counted)
+        q = snap.quotas[cname]
+        for day, seconds in seen.get(cname, {}).items():
+            if seconds > q.used.get(day, 0.0):
+                q.used[day] = seconds
+        q.node_cores = c.cores_per_node
     return snap
 
 

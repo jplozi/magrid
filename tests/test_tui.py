@@ -89,6 +89,41 @@ class NodePicker(Offline):
         self.assertIn("\navoid =\n", config.config_path().read_text())
 
 
+class QuotaReread(Offline):
+    """A quota re-read asked while a reading is in flight is not lost."""
+
+    def test_the_next_reading_carries_the_quota(self):
+        import threading
+        import time
+        from unittest import mock
+
+        args = cli.build_parser().parse_args(["--width", "120", "--no-color", "tui"])
+        app = cli.App(args)
+        cli._known_clusters(app)
+        app.history_later = True
+        app.load(app.board())
+        b = tui.Board(app, FakeStdscr())
+        b.loading = True  # a reading is in flight
+        b.refresh_async(quota=True)  # after a booking
+        self.assertTrue(b.again and b.quota_due)
+        asked = []
+
+        def fake_fetch(remote, cfg, ref, names, *, quota=False, previous=None, **kw):
+            asked.append(quota)
+            return app.snap
+
+        b.loading = False
+        b.quota_at = time.time()  # the ten minutes have not passed: only quota_due can ask for it
+        with mock.patch.object(tui.fetch, "fetch_state", fake_fetch):
+            b.refresh_async()
+            for _ in range(200):
+                if asked:
+                    break
+                time.sleep(0.01)
+        self.assertEqual(asked, [True])
+        self.assertFalse(b.quota_due)
+
+
 class StrayKeys(Offline):
     """A key that arrives twice, or on a stale list, must not act twice."""
 

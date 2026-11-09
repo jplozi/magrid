@@ -148,6 +148,7 @@ class Board:
         self.picks: dict[tuple[str, str], int] = {}
         self.named: dict[tuple[str, str], list[str]] = {}  # cells whose nodes were picked by name
         self.deleting: set[int] = set()  # jobs whose deletion OAR registered, until a reading no longer lists them
+        self.quota_due = False  # a quota re-read was asked for while a reading was in flight
         self.node_pick: Optional[NodePick] = None
         self.pane = "detail"  # detail, gantt, jobs, help
         self.job_row = 0
@@ -228,12 +229,13 @@ class Board:
             return
         if self.loading:
             self.again = True  # the board changed while reading: read again right after
+            self.quota_due = self.quota_due or quota  # and the quota with it, if that was asked
             return
         self.loading = True
         sites = self.default_sites()
-        quota = quota or time.time() - self.quota_at > QUOTA_EVERY or not sites <= self.quota_sites
+        quota = quota or self.quota_due or time.time() - self.quota_at > QUOTA_EVERY or not sites <= self.quota_sites
         if quota:
-            self.quota_at, self.quota_sites = time.time(), sites
+            self.quota_at, self.quota_sites, self.quota_due = time.time(), sites, False
         names, previous = list(self.on_board), self.snap
 
         def work():
