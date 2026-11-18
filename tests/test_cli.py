@@ -294,6 +294,38 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CommonOptions(Offline):
+    """The options every command takes count before the command as well as after it."""
+
+    def parse(self, *argv):
+        return cli.build_parser().parse_args(list(argv))
+
+    def values(self, a):
+        return (a.replay, a.at, a.width, a.no_color, a.refresh, a.clusters)
+
+    def test_given_before_the_command(self):
+        common = ["--replay", "state.json.gz", "--at", "19:15", "--width", "100", "--no-color", "--refresh", "-c", "yeti"]
+        a = self.parse(*common, "board")
+        self.assertEqual(self.values(a), ("state.json.gz", "19:15", 100, True, True, ["yeti"]))
+
+    def test_given_after_the_command(self):
+        common = ["--replay", "state.json.gz", "--at", "19:15", "--width", "100", "--no-color", "-c", "yeti"]
+        a = self.parse("book", "yeti", "-n", *common)
+        self.assertEqual(self.values(a), ("state.json.gz", "19:15", 100, True, False, ["yeti"]))
+
+    def test_the_later_one_wins_and_nothing_given_is_the_default(self):
+        self.assertEqual(self.parse("--width", "100", "board", "--width", "90").width, 90)
+        self.assertEqual(self.values(self.parse("jobs")), (None, None, None, False, False, None))
+        self.assertEqual(self.values(self.parse()), (None, None, None, False, False, None))
+
+    def test_a_recording_named_before_the_command_is_not_read_live(self):
+        self.assertTrue(cli.App(self.parse("--replay", str(FIXTURE), "board")).read_only)
+        rc, out = self.run_cli("--replay", str(FIXTURE), "board")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("yeti", out)
+        self.assertEqual(self.front.commands, [])  # nothing was asked of a frontend
+
+
 class Waiting(Offline):
     def test_wait_books_when_the_reservation_opens(self):
         # Monday 13:10: the weekend (Friday 19:00) opens on Wednesday at 19:00.

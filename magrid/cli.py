@@ -833,22 +833,32 @@ examples:
 """
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _common(command: bool = False) -> argparse.ArgumentParser:
+    """The options every command takes, before its name or after it. The copy
+    a command gets has no defaults: it sets what is given after the command and
+    leaves alone what was given before it. With defaults, argparse would let
+    the command reset every one of them, and `magrid --replay FILE board`
+    would read the platform."""
+    kw = {"default": argparse.SUPPRESS} if command else {}
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-c", "--clusters", action="append", metavar="WORDS",
-                        help="clusters to work on instead of your board: names, sites or groups (arm, gpu, ...)")
-    common.add_argument("--refresh", action="store_true", help="read the cluster descriptions again (cached for a week)")
-    common.add_argument("--no-color", action="store_true", help="plain text")
-    common.add_argument("--width", type=int, help="width of the output in columns")
-    common.add_argument("--replay", metavar="FILE", help=argparse.SUPPRESS)  # a recorded state instead of the platform
-    common.add_argument("--at", metavar="TIME", help=argparse.SUPPRESS)  # with --replay: pretend it is that time
+                        help="clusters to work on instead of your board: names, sites or groups (arm, gpu, ...)", **kw)  # fmt: skip
+    common.add_argument("--refresh", action="store_true", help="read the cluster descriptions again (cached for a week)", **kw)
+    common.add_argument("--no-color", action="store_true", help="plain text", **kw)
+    common.add_argument("--width", type=int, help="width of the output in columns", **kw)
+    common.add_argument("--replay", metavar="FILE", help=argparse.SUPPRESS, **kw)  # a recorded state instead of the platform
+    common.add_argument("--at", metavar="TIME", help=argparse.SUPPRESS, **kw)  # with --replay: pretend it is that time
+    return common
 
+
+def build_parser() -> argparse.ArgumentParser:
+    common = _common(command=True)
     p = argparse.ArgumentParser(
         prog="magrid",
         description="Book Grid'5000 machines without breaking the Usage Policy.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        parents=[common],
+        parents=[_common()],
     )
     p.add_argument("--version", action="version", version=f"magrid {__version__}")
     sub = p.add_subparsers(dest="cmd", metavar="command")
