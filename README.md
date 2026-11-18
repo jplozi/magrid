@@ -291,9 +291,10 @@ the frontend of the site concerned, with the exact command printed first.
   what follows on the node, a maintenance reservation for instance. It is
   taken on a node that is up, and it stops short of what follows: by the
   margin (5 minutes) when the node is idle, by 15 minutes when the node has
-  to come back from another job, which may leave it to be redeployed. The 15
-  minutes are an allowance, not a measurement. A job that starts later than
-  that no longer fits, and the scheduler places it after what follows.
+  to come back from another job, which may leave it to be redeployed (a
+  best-effort job that has to be evicted counts as one). The 15 minutes are
+  an allowance, not a measurement. A job that starts later than that no
+  longer fits, and the scheduler places it after what follows.
 - Nodes shown free may be taken between display and submission. OAR then
   refuses the reservation, which magrid reports.
 - Predicted slots of queued jobs in the default queue are treated as busy,

@@ -383,9 +383,9 @@ def first_slot(nodes: Iterable[Node], now: int, my_queue: str, walltime: int, ma
 
     Only nodes that are up now count: when an absent one comes back is not
     known. The length stops short of what follows, by margin when the nodes
-    are idle now and by TURNAROUND when one has to come back from a job,
-    because a queued job that starts too late to fit is moved after what
-    follows by the scheduler."""
+    are idle now and by TURNAROUND when one has to come back from a job, a
+    best-effort job to evict included, because a queued job that starts too
+    late to fit is moved after what follows by the scheduler."""
     holes = [(s, e, n) for n in nodes if n.hard == "alive" for s, e, _ in node_holes(n, now, my_queue)]
     for t in sorted({s for s, _, _ in holes}):
         free = sorted(((e, n) for s, e, n in holes if s <= t < e),
@@ -395,11 +395,13 @@ def first_slot(nodes: Iterable[Node], now: int, my_queue: str, walltime: int, ma
         end, start = free[k - 1][0], _minute(t)
         if end - start >= walltime:
             break  # a full-length job fits here: nothing shorter starts sooner
-        spare = max(margin, 60) if t <= now + 120 else max(margin, TURNAROUND)
+        chosen = [n for _, n in free[:k]]
+        idle = t <= now + 120 and not any(bs <= now < be for n in chosen for bs, be, _ in n.busy(now, besteffort=True))
+        spare = max(margin, 60) if idle else max(margin, TURNAROUND)
         usable = end - max(t, start) - spare
         usable -= usable % 60
         if usable >= MIN_DURATION:
-            return FirstSlot(usable, start, spare, [n for _, n in free[:k]])
+            return FirstSlot(usable, start, spare, chosen)
     return FirstSlot()
 
 

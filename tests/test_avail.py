@@ -270,6 +270,11 @@ class Queue(unittest.TestCase):
         both = avail.first_slot(c.nodes, now, "p3", 48 * H, 300, 2)  # two nodes at once: when the second is free
         self.assertEqual((both.length, both.start, both.nodes), (9 * H + 42 * 60, T(MON, 22, 1), [n1, n2]))
         self.assertFalse(avail.first_slot([n3], now, "p3", 48 * H, 300))  # 28 minutes before the reservation: too short
+        # a best-effort job gives way to a p3 job at once, but the node has to come back from it all the same
+        n1.resvs.append(resv("erin", T(MON, 12), T(TUE, 12), queue="besteffort", kind="B", types=("besteffort",), now=now))
+        slot = avail.first_slot([n1], now, "p3", 48 * H, 300)
+        self.assertEqual((slot.length, slot.start, slot.spare), (12 * H + 28 * 60, now, 900))
+        n1.resvs.pop()
         self.assertFalse(avail.first_slot(c.nodes, now, "p3", 12 * H, 300))  # 12 h fit on node 1 now: nothing shorter is sooner
         o = offer(snap, "grdix", "now")
         self.assertEqual((o.short_walltime, o.short_est[0]), (12 * H + 38 * 60, (now, n1)))
