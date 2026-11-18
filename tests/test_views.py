@@ -2,7 +2,7 @@ import unittest
 
 from magrid import audit, avail, fetch, plan, term, views
 from magrid.plan import When
-from tests.helpers import FIXTURE, H, MON, TUE, T, cfg, my_job, platform, resv
+from tests.helpers import FIXTURE, H, MON, TUE, T, cfg, cluster, my_job, platform, resv, snapshot
 
 CLUSTERS = ["yeti", "dahu", "larochette", "grdix", "granite", "grosminet", "roazhon15"]
 
@@ -109,6 +109,18 @@ class Marker(unittest.TestCase):
     """The ●N of nodes you already hold stays visible in every kind of cell, in the colour of the job's state."""
 
     now = T(MON, 13, 10)
+
+    def test_the_marker_covers_the_column_not_the_offered_window(self):
+        # 2026-11-18: a yeti held until 17:02 showed no marker under NOW, whose only window started at 17:04
+        mine = resv("me", T(MON, 13), T(MON, 14, 30), now=self.now)
+        snap = snapshot(self.now, [cluster("yeti", 1, busy={1: [mine]})], used={"yeti": {MON: 1.5 * 3600 * 64}},
+                        jobs=[my_job("grenoble", mine, ["yeti-1"], {"yeti": 64})])
+        slot = avail.find_slot(avail.slots(self.now), "now")
+        o = avail.offer_for(snap, snap.clusters["yeti"], slot, margin=300, besteffort_walltime=48 * H)
+        self.assertGreater(o.best.start, mine.end)  # the window offered starts after the job
+        l1, _ = views.offer_cell(o, snap, views.CELL_W - 1)
+        marks = [(text, st.fg) for text, st in l1 if text.startswith("●")]
+        self.assertEqual(marks, [("●1", views.MARK_ST["running"].fg)])
 
     def test_one_marker_per_state_in_its_colour(self):
         running = resv("me", T(MON, 9), T(MON, 15), now=self.now)  # on yeti-1, then a reservation on the same node

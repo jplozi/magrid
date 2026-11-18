@@ -63,6 +63,7 @@ class App:
                 if stale and sys.stderr.isatty():
                     print("magrid: reading which clusters you used recently (once a day)…", file=sys.stderr, end="\r", flush=True)
                 self._history = fetch.load_history(self.remote, self.cfg, self.reference())
+                self.history_stale = False  # just read: the board has no reason to read it again behind
                 if stale and sys.stderr.isatty():
                     print(" " * 70, file=sys.stderr, end="\r", flush=True)
         return self._history

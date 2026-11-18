@@ -195,14 +195,19 @@ def _state_of(r: Resv) -> str:
     return "running" if r.running else "reserved" if r.kind == "R" else "queued"
 
 
-def _mine_in(c: Cluster, snap: Snapshot, start: int, end: int) -> dict[str, int]:
-    """How many nodes of the cluster the user holds during a window, per state
-    of the job: running, reserved (not started yet), queued."""
+def _mine_in(c: Cluster, snap: Snapshot, start: int, end: int, unplaced: bool = False) -> dict[str, int]:
+    """How many nodes of the cluster the user's own jobs hold between start and
+    end, per state of the job: running, reserved (not started yet), queued.
+    unplaced: also count queued jobs that have no start estimate yet."""
     counts = {"running": 0, "reserved": 0, "queued": 0}
-    for node in c.nodes:
-        states = {_state_of(r) for r in node.resvs if r.user == snap.me and r.start and r.start < end and r.end > start}
-        for s in states:
-            counts[s] += 1
+    for j in snap.jobs:
+        if c.name not in j.clusters:
+            continue
+        r = j.resv
+        if not (r.start < end and r.end > start) if r.start else not unplaced:
+            continue
+        here = sum(1 for n in j.nodes if n.rsplit("-", 1)[0] == c.name)
+        counts[_state_of(r)] += here or 1
     return counts
 
 
@@ -283,8 +288,12 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
     if offer.cluster.state in ("reading", "unread"):
         return cell("reading…" if offer.cluster.state == "reading" else "not read", width, VDIM.on(bg)), cell("", width, fill)
     w = window or offer.best
-    start, end = (w.start, w.end) if w is not None else (offer.slot.start, offer.slot.period.end)
-    mark = _mine_in(offer.cluster, snap, start, end)
+    # the marker speaks for the whole column, not for the window offered in it: a job that ends before
+    # the offered window starts is still held "now" (2026-11-18: a yeti held until 17:02 showed no marker
+    # because the only window left that day started at 17:04)
+    span_start = min(offer.slot.start, now) if offer.slot.is_now else offer.slot.start
+    span_end = max(offer.slot.period.end, w.end if w is not None else 0)
+    mark = _mine_in(offer.cluster, snap, span_start, span_end, unplaced=offer.slot.is_now)
     if offer.opens:
         reason, reason_st = [f"opens {fmt_when(offer.opens, now)}", f"opens {_short_when(offer.opens, now)}"], WARN
     else:

@@ -37,6 +37,18 @@ class FakeStdscr:
         return "\n".join("".join(self.rows[y]).rstrip() for y in sorted(self.rows))
 
 
+def make_board(case, app, scr):
+    """A board whose background threads are over before the test's temporary directories go."""
+    b = tui.Board(app, scr)
+
+    def settle():
+        if b.history_job is not None:
+            b.history_job[0].join(timeout=20)
+
+    case.addCleanup(settle)
+    return b
+
+
 class NodePicker(Offline):
     def setUp(self):
         super().setUp()
@@ -46,7 +58,7 @@ class NodePicker(Offline):
         self.app.history_later = True
         self.app.load(self.app.board())
         self.scr = FakeStdscr()
-        self.board = tui.Board(self.app, self.scr)
+        self.board = make_board(self, self.app, self.scr)
         b = self.board
         b.row = [c.name for c in b.clusters].index("yeti")
         b.col = [s.key for s in b.slots].index(avail.find_slot(b.slots, "tonight").key)
@@ -102,7 +114,7 @@ class QuotaReread(Offline):
         cli._known_clusters(app)
         app.history_later = True
         app.load(app.board())
-        b = tui.Board(app, FakeStdscr())
+        b = make_board(self, app, FakeStdscr())
         b.loading = True  # a reading is in flight
         b.refresh_async(quota=True)  # after a booking
         self.assertTrue(b.again and b.quota_due)
@@ -135,7 +147,7 @@ class StrayKeys(Offline):
         self.app.history_later = True
         self.app.load(self.app.board())
         self.scr = FakeStdscr()
-        self.board = tui.Board(self.app, self.scr)
+        self.board = make_board(self, self.app, self.scr)
 
     def test_a_choice_can_be_undone_and_the_status_says_how(self):
         b = self.board
