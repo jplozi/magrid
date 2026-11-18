@@ -53,7 +53,9 @@ HELP = """\
                      x avoids one for good (x again allows it), Enter or n back
    g                 timeline of the focused cluster, full height (g again to go back)
    j                 your jobs: d deletes one, x extends one
-   s                 show only the current period for "now" (do not run on through 19:00 or 09:00)
+   s                 the shorter choice. On a reservable cluster, "now" stays in the current
+                     period (no running on through 19:00 or 09:00). On a queued cluster, the
+                     first slot that exists is asked for instead of the full length
    r                 read the platform again (done every minute anyway)
    ?                 this help                              q   quit
 
@@ -155,6 +157,7 @@ class Board:
         self.message = ""
         self.message_style = DIM
         self.short = False
+        self.sooner: set[str] = set()  # queued clusters on which the first slot is asked for, not the full length
         self.loading = False
         self.loaded_at = time.time()
         self.fresh: Optional[Snapshot] = None
@@ -206,6 +209,7 @@ class Board:
         self.offers = avail.build_offers(snap, self.clusters, self.slots, margin=cfg.margin,
                                          besteffort_walltime=cfg.besteffort_walltime, avoid=cfg.avoid)  # fmt: skip
         self.findings = self.app.findings()
+        self.sooner = {name for (name, _), o in self.offers.items() if name in self.sooner and o.short_walltime}
         self.row = min(self.row, max(0, len(self.clusters) - 1))
         self.col = min(self.col, max(0, len(self.slots) - 1))
         # choices that no longer exist are dropped
@@ -504,7 +508,7 @@ class Board:
                     shown = self.clusters[first : first + keep]
                 for ln in views.board(snap, self.app.cfg, shown, self.slots, self.offers, self.width,
                                       focus=focus, picks=self.picks, windows=windows, compact=compact,
-                                      named=self.named):  # fmt: skip
+                                      named=self.named, sooner=self.sooner):  # fmt: skip
                     self.screen.put(y, ln)
                     y += 1
                 if len(shown) < n:
@@ -536,7 +540,7 @@ class Board:
                 cursor = names[min(self.node_pick.row, len(names) - 1)] if names else None
             detail = views.offer_detail(o, self.snap, self.app.cfg, self.names, self.width, k=k,
                                         window=self.window(key), max_lines=max(4, room - gantt_room - 1),
-                                        picked=self.named.get(key), cursor=cursor)  # fmt: skip
+                                        picked=self.named.get(key), cursor=cursor, short=c.name in self.sooner)  # fmt: skip
             for ln in detail:
                 self.screen.put(y, ln)
                 y += 1
@@ -668,7 +672,9 @@ class Board:
         out = []
         for (cname, skey), k in picks.items():
             slot = by_key[skey]
-            when = plan.When(slot=slot.key if not slot.is_now else "now", short=self.short)
+            o = self.offers.get((cname, skey))
+            short = (cname in self.sooner) if (o is not None and o.mode != "reserve") else self.short
+            when = plan.When(slot=slot.key if not slot.is_now else "now", short=short)
             out.append((plan.Want(cname, k, list(self.named.get((cname, skey), []))), when))
         return out
 
@@ -897,7 +903,13 @@ class Board:
         elif ch in (ord("x"), ord("X"), curses.KEY_DC):
             self.hide_focused()
         elif ch in (ord("s"), ord("S")):
-            self.short = not self.short
+            o = self.focus_offer()
+            if o is None or o.mode == "reserve":
+                self.short = not self.short
+            elif not o.short_walltime:
+                self.say("nothing shorter starts sooner here: a full-length job starts as soon", DIM)
+            else:
+                self.sooner ^= {o.cluster.name}
         elif ch in (ord("g"), ord("G")):
             self.pane = "detail" if self.pane == "gantt" else "gantt"
         elif ch in (curses.KEY_ENTER, 10, 13, ord("b"), ord("B")):

@@ -32,7 +32,10 @@ over several web pages and commands. magrid gathers it and applies the rules.
 - **Board.** For each cluster and each coming time slot (now, tonight,
   tomorrow, the coming weekend), the number of nodes free for the whole slot
   and the longest duration the rules allow. Production clusters show the
-  priority queue, the maximum walltime and an estimated start.
+  priority queue, the maximum walltime and an estimated start. When a shorter
+  job would start sooner than one of the maximum length, the cell gives that
+  first slot as well (`sooner: 5h21 from Thu 02:22`), and it can be asked for
+  instead.
 - **Booking.** Given clusters and node counts, magrid selects the window,
   computes the start and the walltime, lists the rules it checked, prints the
   `oarsub` command and asks for confirmation. After submission it reads back
@@ -213,6 +216,7 @@ magrid book yeti dahu:4         as early as possible, as long as the rules allow
 magrid book yeti --from 14:00 --for 3h
 magrid book yeti:2 --weekend --wait    submit when the 48-hour horizon allows it
 magrid book grdix:2             two queued jobs on a production cluster
+magrid book grdix --short       there, the first slot that exists instead of the full length
 magrid book yeti-2 -n           dry run: the command only
 magrid book yeti:2 --avoid yeti-4   any two yeti nodes but yeti-4
 magrid avoid yeti-4             never book yeti-4, until magrid allow yeti-4
@@ -231,7 +235,10 @@ In the interactive board: arrows move, `+` and `-` set the number of nodes
 in the focused cell, `m` takes all of them, Enter reviews the commands and
 books, `a` adds a cluster (searchable), `x` hides one, `n` picks nodes by
 name in the focused cell (Space) or marks one as avoided for good (`x` on the
-node), `g` shows the timeline, `j` the user's jobs, `?` the help.
+node), `g` shows the timeline, `j` the user's jobs, `?` the help. `s` asks
+for the shorter choice: on a reservable cluster, a window for now that stays
+inside the current period, and on a production cluster, the first slot that
+exists instead of the full length.
 
 A booking plan, as shown before confirmation:
 
@@ -280,6 +287,13 @@ the frontend of the site concerned, with the exact command printed first.
   Jobs of higher priority submitted later are scheduled first, and within a
   queue OAR orders jobs by the fair-share karma of their projects, which
   magrid does not see: a node shown free is a hint, not a promise.
+- The first slot offered on a production cluster is a job cut to fit before
+  what follows on the node, a maintenance reservation for instance. It is
+  taken on a node that is up, and it stops short of what follows: by the
+  margin (5 minutes) when the node is idle, by 15 minutes when the node has
+  to come back from another job, which may leave it to be redeployed. The 15
+  minutes are an allowance, not a measurement. A job that starts later than
+  that no longer fits, and the scheduler places it after what follows.
 - Nodes shown free may be taken between display and submission. OAR then
   refuses the reservation, which magrid reports.
 - Predicted slots of queued jobs in the default queue are treated as busy,

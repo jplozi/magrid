@@ -230,6 +230,56 @@ class Queue(unittest.TestCase):
         self.assertEqual(est, {"grdix-1": T(MON, 20, 1), "grdix-2": T(MON, 16, 1), "grdix-3": now})  # OAR's gap, to the minute
         self.assertEqual(o.ahead, 1)
 
+    ABACA = dict(site="nancy", cores=72, queues=("abaca", "admin", "production"), access="p3", max_walltime=24 * H)
+
+    def test_a_shorter_job_that_starts_sooner(self):
+        # 2026-11-18, grosminet: p3 jobs until 02:21, then an admin reservation from 08:00 to 14:00. A job
+        # of the full 24 h starts at 14:01. A shorter one fits before the reservation, with a quarter of
+        # an hour left for the node to come back from the jobs before it
+        now = T(MON, 19, 15)
+        running = resv("ishah", T(MON, 18, 21), T(TUE, 2, 21), queue="p3", kind="B", types=(), now=now)
+        evicted = resv("ishah", T(MON, 18, 19), T(TUE, 2, 19), queue="besteffort", kind="B", types=("besteffort",), now=now)
+        admin = resv("nperrin", T(TUE, 8), T(TUE, 14), queue="admin", state="waiting")
+        snap = snapshot(now, [cluster("grosminet", 1, busy={1: [evicted, running, admin]}, **self.ABACA)])
+        o = offer(snap, "grosminet", "now")
+        self.assertEqual((o.walltime, o.est[0][0]), (24 * H, T(TUE, 14, 1)))
+        self.assertEqual((o.short_walltime, o.short_est[0][0]), (5 * H + 21 * 60, T(TUE, 2, 22)))
+        w = o.windows[0]  # the node's first free stretch, what follows it, and who holds the node for good
+        self.assertEqual((w.start, w.until, w.next.user), (T(TUE, 2, 22), T(TUE, 8) - 61, "nperrin"))
+        self.assertEqual((w.blocker.queue, w.blocker.end), ("p3", T(TUE, 2, 21)))
+        # nothing shorter is offered when a full-length job starts as soon
+        free = snapshot(now, [cluster("grosminet", 1, **self.ABACA)])
+        self.assertEqual(offer(free, "grosminet", "now").short_walltime, 0)
+        only_running = snapshot(now, [cluster("grosminet", 1, busy={1: [running]}, **self.ABACA)])
+        self.assertEqual(offer(only_running, "grosminet", "now").short_walltime, 0)
+
+    def test_the_first_slot_on_several_nodes(self):
+        # a reservation at 08:00 on the whole cluster. Node 1 is idle until then, node 2 comes back from a
+        # job at 22:00, node 3 at 07:30
+        now = T(MON, 19, 15)
+        admin = resv("nperrin", T(TUE, 8), T(TUE, 14), queue="admin", state="waiting")
+        a = resv("tboulet", T(MON, 0), T(MON, 22), queue="p3", kind="B", now=now)
+        b = resv("hhutin", T(MON, 0), T(TUE, 7, 30), queue="p3", kind="B", now=now)
+        c = cluster("grdix", 3, busy={1: [admin], 2: [a, admin], 3: [b, admin]}, **dict(self.ABACA, max_walltime=48 * H))
+        snap = snapshot(now, [c])
+        n1, n2, n3 = c.nodes
+        slot = avail.first_slot(c.nodes, now, "p3", 48 * H, 300)  # idle now: the margin is all that is kept back
+        self.assertEqual((slot.length, slot.start, slot.spare, slot.nodes), (12 * H + 38 * 60, now, 300, [n1]))
+        slot = avail.first_slot([n2, n3], now, "p3", 48 * H, 300)  # back from a job: a quarter of an hour for that
+        self.assertEqual((slot.length, slot.start, slot.spare, slot.nodes), (9 * H + 42 * 60, T(MON, 22, 1), 900, [n2]))
+        both = avail.first_slot(c.nodes, now, "p3", 48 * H, 300, 2)  # two nodes at once: when the second is free
+        self.assertEqual((both.length, both.start, both.nodes), (9 * H + 42 * 60, T(MON, 22, 1), [n1, n2]))
+        self.assertFalse(avail.first_slot([n3], now, "p3", 48 * H, 300))  # 28 minutes before the reservation: too short
+        self.assertFalse(avail.first_slot(c.nodes, now, "p3", 12 * H, 300))  # 12 h fit on node 1 now: nothing shorter is sooner
+        o = offer(snap, "grdix", "now")
+        self.assertEqual((o.short_walltime, o.short_est[0]), (12 * H + 38 * 60, (now, n1)))
+        n1.hard = "absent"  # when it comes back is not known: the slot is taken on a node that is up
+        self.assertEqual(avail.first_slot(c.nodes, now, "p3", 48 * H, 300).nodes, [n2])
+        o = offer(snap, "grdix", "now")
+        self.assertEqual((o.short_walltime, o.short_est[0]), (9 * H + 42 * 60, (T(MON, 22, 1), n2)))
+        named = avail.restricted(snap, o, ["grdix-3"], 300)  # limited to a node that has nothing shorter to give
+        self.assertEqual((named.short_walltime, named.short_est), (0, []))
+
     def test_besteffort_only_cluster(self):
         now = T(MON, 13, 10)
         holder = resv("bob", T(MON, 9), T(MON, 18), queue="p1", kind="B", now=now)

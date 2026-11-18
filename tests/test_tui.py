@@ -101,6 +101,39 @@ class NodePicker(Offline):
         self.assertIn("\navoid =\n", config.config_path().read_text())
 
 
+class QueuedChoice(Offline):
+    """On a queued cluster, s chooses between the first slot and the full length."""
+
+    def test_s_switches_on_a_queued_cluster_only(self):
+        args = cli.build_parser().parse_args(["--width", "120", "--no-color", "tui"])
+        app = cli.App(args)
+        cli._known_clusters(app)
+        app.history_later = True
+        app.load(app.board())
+        scr = FakeStdscr()
+        b = make_board(self, app, scr)
+        b.row = [c.name for c in b.clusters].index("grdix")
+        key = b.focus_key()
+        o = b.offers[key]
+        self.assertNotEqual(o.mode, "reserve")
+        b.key(ord("s"))  # nothing shorter in the recorded state: said, and nothing changes
+        self.assertEqual((b.sooner, b.short), (set(), False))
+        self.assertIn("nothing shorter", b.message)
+        o.short_walltime, o.short_est = 5 * 3600, list(o.est)  # as if five hours came before a full-length slot
+        b.key(ord("s"))
+        self.assertEqual((b.sooner, b.short), ({"grdix"}, False))
+        self.assertTrue(b.asks({key: 1})[0][1].short)
+        b.draw()
+        self.assertIn("queue p3 · 5h ·", scr.text())
+        self.assertIn("or up to 48h", scr.text())
+        b.key(ord("s"))
+        self.assertEqual(b.sooner, set())
+        self.assertFalse(b.asks({key: 1})[0][1].short)
+        b.row = [c.name for c in b.clusters].index("yeti")  # a reservable cluster: the old meaning
+        b.key(ord("s"))
+        self.assertEqual((b.sooner, b.short), (set(), True))
+
+
 class QuotaReread(Offline):
     """A quota re-read asked while a reading is in flight is not lost."""
 

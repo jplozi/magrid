@@ -216,6 +216,68 @@ class ClockGuard(unittest.TestCase):
         self.assertIsNone(plan.finalize(it, snap, T(MON, 17, 0, 6)))
 
 
+class FirstSlot(unittest.TestCase):
+    """A production cluster under an admin reservation from 08:00. Node 1 is idle
+    until then, node 2 comes back from a job at 22:00, and a full-length job
+    only starts after the reservation."""
+
+    def setUp(self):
+        from tests.helpers import cluster, snapshot
+
+        self.now = T(MON, 19, 15)
+        admin = resv("nperrin", T(TUE, 8), T(TUE, 14), queue="admin", state="waiting")
+        job = resv("tboulet", T(MON, 0), T(MON, 22), queue="p3", kind="B", now=self.now)
+        self.abaca = dict(site="nancy", cores=256, queues=("abaca", "admin", "production"), access="p3", max_walltime=48 * H)
+        self.snap = snapshot(self.now, [cluster("grdix", 2, busy={1: [admin], 2: [job, admin]}, **self.abaca)])
+
+    def ask(self, when, want=None, **kw):
+        return [p.request for p in make_plan(self.snap, cfg(), [want or Want("grdix", 1)], when, **kw).items]
+
+    def test_short_asks_for_the_first_slot(self):
+        [r] = self.ask(When(short=True))
+        self.assertEqual((r.walltime, r.est_start), (12 * H + 38 * 60, self.now))
+        self.assertIn("walltime=12:38:00", " ".join(r.argv()))
+        self.assertTrue(any("first slot" in n for n in r.notes), r.notes)
+        self.assertTrue(any("within 5min" in n for n in r.notes), r.notes)
+
+    def test_two_jobs_take_the_first_two_slots(self):
+        a, b = self.ask(When(short=True), Want("grdix", 2))
+        self.assertEqual((a.walltime, a.est_start), (12 * H + 38 * 60, self.now))
+        self.assertEqual((b.walltime, b.est_start), (9 * H + 42 * 60, T(MON, 22, 1)))
+        self.assertTrue(any("within 15min" in n for n in b.notes), b.notes)
+
+    def test_one_job_on_two_nodes_waits_for_both(self):
+        [r] = self.ask(When(short=True), Want("grdix", 2), split=False)
+        self.assertEqual((r.nodes, r.walltime, r.est_start), (2, 9 * H + 42 * 60, T(MON, 22, 1)))
+
+    def test_a_named_node_takes_its_own_slot(self):
+        [r] = self.ask(When(short=True), Want("grdix", 1, ["grdix-2"]))
+        self.assertEqual((r.hosts, r.walltime, r.est_start), (["grdix-2"], 9 * H + 42 * 60, T(MON, 22, 1)))
+
+    def test_the_estimate_follows_the_length_asked(self):
+        [r] = self.ask(When(duration=4 * H), Want("grdix", 1, ["grdix-2"]))
+        self.assertEqual((r.walltime, r.est_start), (4 * H, T(MON, 22, 1)))
+        [r] = self.ask(When(duration=12 * H), Want("grdix", 1, ["grdix-2"]))  # too long for what is left before the reservation
+        self.assertEqual((r.walltime, r.est_start), (12 * H, T(TUE, 14, 1)))
+        [r] = self.ask(When(duration=2 * H, short=True))  # less than the first slot: the length asked decides
+        self.assertEqual((r.walltime, r.est_start), (2 * H, self.now))
+        self.assertFalse(any("first slot" in n for n in r.notes), r.notes)
+
+    def test_a_full_length_job_says_what_would_start_sooner(self):
+        [r] = self.ask(When())
+        self.assertEqual((r.walltime, r.est_start), (48 * H, T(TUE, 14, 1)))
+        self.assertIn("a shorter job, 12h38, would start now", r.notes)
+
+    def test_short_where_nothing_shorter_starts_sooner(self):
+        from tests.helpers import cluster, snapshot
+
+        free = snapshot(self.now, [cluster("grdix", 2, **self.abaca)])
+        plan = make_plan(free, cfg(), [Want("grdix", 1)], When(short=True))
+        r = plan.items[0].request
+        self.assertEqual((r.walltime, r.est_start), (48 * H, self.now))
+        self.assertTrue(any("nothing shorter" in n for n in plan.notes), plan.notes)
+
+
 class NodesUp(unittest.TestCase):
     def test_an_immediate_reservation_names_the_nodes_that_are_up(self):
         # 2026-11-03: OAR put an immediate reservation on a powered-off paradoxe node, whose wake-up failed

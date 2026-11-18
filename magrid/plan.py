@@ -111,7 +111,7 @@ class When:
     start: Optional[int] = None  # explicit start
     until: Optional[int] = None  # explicit end
     duration: Optional[int] = None
-    short: bool = False  # do not use the 17:00 or after-midnight crossings
+    short: bool = False  # do not use the 17:00 or after-midnight crossings. Queued clusters: the first slot that exists
     clip: bool = False  # an --until or --for the rules do not allow is shortened instead of refused
 
 
@@ -276,7 +276,8 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
         )
     slot = avail.slots(now)[0]
     avoid = _avoided(cfg, c, want)
-    offer = avail.queue_offer(snap, c, slot, cfg.besteffort_walltime, besteffort=besteffort, now=now, avoid=avoid)
+    offer = avail.queue_offer(snap, c, slot, cfg.besteffort_walltime, besteffort=besteffort, now=now, avoid=avoid,
+                              margin=cfg.margin)  # fmt: skip
     if offer.mode == "none" or offer.blocked:
         plan.problems.append(f"{c.name}: {offer.blocked}")
         return
@@ -287,16 +288,18 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
         if missing:
             plan.problems.append(f"{c.name}: cannot use {', '.join(missing)} in the {offer.queue} queue")
             return
+    limit = offer.walltime
+    asked = when.duration or (when.until - now if when.until else None)
+    if asked and asked > limit:
+        plan.notes.append(f"{c.name}: {fmt_dur(asked)} asked, the limit in the {offer.queue} queue is {fmt_dur(limit)}")
+    walltime = min(limit, asked) if asked else limit
+    nodes = [n for _, n in est]
+    if walltime != limit:  # the estimate follows the length asked
+        est = avail.estimates(nodes, now, walltime, offer.queue)
     k = want.count if want.count is not None else sum(1 for t, _ in est if t <= now + 120) or 1
     if k > len(est):
         plan.problems.append(f"{c.name}: {k} nodes asked, {len(est)} usable in the {offer.queue} queue")
         return
-    walltime = offer.walltime
-    asked = when.duration or (when.until - now if when.until else None)
-    if asked:
-        if asked > walltime:
-            plan.notes.append(f"{c.name}: {fmt_dur(asked)} asked, the limit in the {offer.queue} queue is {fmt_dur(walltime)}")
-        walltime = min(walltime, asked)
     kind = "besteffort" if offer.mode == "besteffort" else "abaca"
     types = job_types(c, cfg.types_for(kind))
     notes = []
@@ -306,18 +309,36 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
         notes.append(f"abaca queue {offer.queue}: no day or night rule, and the start is decided by the scheduler")
         if offer.ahead:
             notes.append(f"{offer.ahead} queued job{'s' if offer.ahead > 1 else ''} of equal or higher priority may go first")
-    jobs = k if split else 1
+    jobs, per = (k, 1) if split else (1, k)
+    left = list(nodes)  # each job takes its nodes out, as booking them one at a time would
+    shortened = False
     for i in range(jobs):
         hosts = [want.hosts[i]] if (want.hosts and split) else list(want.hosts)
-        t = est[i][0] if split else est[k - 1][0]
+        pool = [n for n in left if n.name in hosts] if (hosts and split) else left
+        ranked = avail.estimates(pool, now, walltime, offer.queue)
+        length, t, used = walltime, ranked[per - 1][0], [n for _, n in ranked[:per]]
+        extra = []
+        first = avail.first_slot(pool, now, offer.queue, limit, cfg.margin, per) if offer.mode == "queue" else avail.FirstSlot()
+        if first and first.length < walltime and first.start < t - 120:
+            if when.short:  # the first slot that exists, not the full length
+                length, t, used, shortened = first.length, first.start, first.nodes, True
+                extra.append(f"the first slot that exists, where the queue allows up to {fmt_dur(limit)}")
+                extra.append(f"it fits before what follows only if it starts within {fmt_dur(first.spare)} of the estimate")
+            else:
+                starts = "now" if first.start <= now + 120 else fmt_when(first.start, now)
+                extra.append(f"a shorter job, {fmt_dur(first.length, exact=True)}, would start {starts}")
         v = policy.Verdict()
-        v.add("queue", True, f"{offer.queue} queue: walltime {fmt_dur(walltime)} of at most {fmt_dur(offer.walltime)}")
+        v.add("queue", True, f"{offer.queue} queue: walltime {fmt_dur(length, exact=True)} of at most {fmt_dur(limit)}")
         req = Request(
-            site=c.site, cluster=c.name, nodes=(1 if split else k), queue=("besteffort" if kind == "besteffort" else "abaca"),
-            types=types, walltime=walltime, hosts=hosts, avoid=([] if hosts else avoid), command=cfg.command, verdict=v,
-            notes=notes, est_start=t,
+            site=c.site, cluster=c.name, nodes=per, queue=("besteffort" if kind == "besteffort" else "abaca"),
+            types=types, walltime=length, hosts=hosts, avoid=([] if hosts else avoid), command=cfg.command, verdict=v,
+            notes=notes + extra, est_start=t,
         )  # fmt: skip
         plan.items.append(Planned(req, c, None, False, cores=req.nodes * c.cores_per_node, offer=offer))
+        gone = {n.name for n in used}
+        left = [n for n in left if n.name not in gone]
+    if when.short and offer.mode == "queue" and walltime == limit and not shortened:
+        plan.notes.append(f"{c.name}: nothing shorter starts sooner, so this is the full length")
 
 
 def make_plans(snap: Snapshot, cfg: Config, asks: list[tuple[Want, When]], *, split: Optional[bool] = None,

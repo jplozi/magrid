@@ -817,6 +817,7 @@ examples:
   magrid book yeti dahu:4        as early as possible, as long as the rules allow
   magrid book yeti --from 14:00 --for 3h
   magrid book grdix:2            two queued jobs on an abaca cluster
+  magrid book grdix --short      there, the first slot that exists instead of the full length
   magrid book yeti-2 -n          dry run on a given node: show the command only
   magrid who roazhon15           who holds it, until when
   magrid board arm               the ARM clusters (also: lyon, gpu, x86, power, exotic, abaca, all)
@@ -875,7 +876,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--from", dest="start", metavar="TIME", help="start time (19:00, 'tue 9:00', '2026-10-09 19:00')")
     g.add_argument("--until", metavar="TIME", help="end time")
     g.add_argument("--for", dest="duration", metavar="DURATION", help="duration (4h, 90m, 2d)")
-    g.add_argument("--short", action="store_true", help="stay inside the current period (do not run on through 19:00 or 09:00)")
+    g.add_argument("--short", action="store_true",
+                   help="stay inside the current period (do not run on through 19:00 or 09:00). "
+                        "On a production cluster: the first slot that exists, instead of the full length")  # fmt: skip
     g.add_argument("--clip", action="store_true", help="if --until or --for is more than the rules allow, take what they allow")
     g = sp.add_argument_group("how")
     g.add_argument("--split", action="store_true", help="one job per node")

@@ -331,8 +331,12 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
     return l1, l2.clip(width).pad(width, fill)
 
 
-def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False, pick: int = 0) -> tuple[Line, Line]:
-    """The wide cell of a cluster whose jobs are queued (abaca, best-effort)."""
+def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False, pick: int = 0, short: bool = False,
+               compact: bool = False) -> tuple[Line, Line]:  # fmt: skip
+    """The wide cell of a cluster whose jobs are queued (abaca, best-effort).
+    When a shorter job would start sooner than a full-length one, both are
+    shown: short says which of the two is asked for. In a compact board only
+    the first line shows, so it carries the other choice when there is room."""
     now = snap.now
     bg = BG_SELECT if focus else None
     if offer.cluster.state in ("reading", "unread"):
@@ -340,25 +344,44 @@ def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         return cell(text, width, VDIM.on(bg)), cell("", width, St(bg=bg))
     if offer.mode == "none":
         return cell(offer.blocked, width, VDIM.on(bg)), cell("", width, St(bg=bg))
-    free = sum(1 for t, _ in offer.est if t <= now + 120)
-    first = offer.est[0][0] if offer.est else 0
+    brief = bool(short and offer.short_walltime)  # the first slot is what is asked for, not the full length
+    est = offer.short_est if brief else offer.est
+    free = sum(1 for t, _ in est if t <= now + 120)
+    first = est[0][0] if est else 0
     kind = "best-effort" if offer.mode == "besteffort" else f"queue {offer.queue}"
-    l1 = Line()
-    if pick:
-        l1.add(f"{pick} of {len(offer.est)} ", St(WHITE, bold=True).on(bg))
-    l1.add(f"{kind} · up to {fmt_dur(offer.walltime)} · ", DIM.on(bg))
-    if not offer.est:
-        l1.add("no usable node", BAD.on(bg))
-    elif free:
-        l1.add(f"{free} free now", OKB.on(bg))
-    else:
-        l1.add(f"est. start {fmt_when(first, now)}", WARNB.on(bg))
+    length = fmt_dur(offer.short_walltime, exact=True) if brief else f"up to {fmt_dur(offer.walltime)}"
+
+    def starting(t: int) -> str:
+        return "now" if t <= now + 120 else f"from {fmt_when(t, now)}"
+
+    other = ""  # the choice not taken, when there are two
+    if offer.short_walltime and brief:
+        other = f"or up to {fmt_dur(offer.walltime)} {starting(offer.est[0][0])}"
+    elif offer.short_walltime:
+        other = f"sooner: {fmt_dur(offer.short_walltime, exact=True)} {starting(offer.short_est[0][0])}"
+    mark = Line()
     mine = [j for j in snap.jobs if offer.cluster.name in j.clusters]
     if mine:
         counts = {"running": 0, "reserved": 0, "queued": 0}
         for j in mine:
             counts[_state_of(j.resv)] += len(j.nodes) or 1
-        l1.add("  ", St(bg=bg)).extend_line(_marker(counts, bg))
+        mark = _marker(counts, bg)
+    l1 = Line()
+    if pick:
+        l1.add(f"{pick} of {len(est)} ", St(WHITE, bold=True).on(bg))
+    l1.add(f"{kind} · {length} · ", DIM.on(bg))
+    if not est:
+        l1.add("no usable node", BAD.on(bg))
+    elif free:
+        l1.add(f"{free} free now", OKB.on(bg))
+    else:
+        l1.add(f"est. start {fmt_when(first, now)}", WARNB.on(bg))
+    room = width - (mark.width + 2 if mark.width else 0)  # the marker always shows
+    if other and compact and l1.width + 3 + len(other) <= room:
+        l1.add(" · ", DIM.on(bg)).add(other, ACCENT.on(bg))
+    l1 = l1.clip(room)
+    if mark.width:
+        l1.add("  ", St(bg=bg)).extend_line(mark)
     l2 = Line()
     if offer.blocked:
         l2.add(offer.blocked, BAD.on(bg))
@@ -373,6 +396,12 @@ def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         if offer.ahead:
             bits.append(f"{offer.ahead} queued ahead")
         bits.append("no day or night rule, higher priorities go first")
+        if other:
+            while bits and len(other) + sum(3 + len(b) for b in bits) > width:
+                bits.pop()  # the other choice comes first: what does not fit after it is left out
+            l2.add(other, ACCENT.on(bg))
+            if bits:
+                l2.add(" · ", DIM.on(bg))
         l2.add(" · ".join(bits), DIM.on(bg))
     return l1.clip(width).pad(width, St(bg=bg)), l2.clip(width).pad(width, St(bg=bg))
 
@@ -401,13 +430,16 @@ def board(
     windows: Optional[dict[tuple[str, str], Window]] = None,
     compact: bool = False,
     named: Optional[dict[tuple[str, str], list[str]]] = None,
+    sooner: Optional[set[str]] = None,
 ) -> list[Line]:
     """The table: one row per cluster, one column per slot. compact keeps one
-    line per cluster, for short terminals. named: nodes chosen by name per cell."""
+    line per cluster, for short terminals. named: nodes chosen by name per cell.
+    sooner: queued clusters on which the first slot is asked for, not the full length."""
     now = snap.now
     picks = picks or {}
     windows = windows or {}
     named = named or {}
+    sooner = sooner or set()
     out = []
     h1, h2 = Line().add(" " * NAME_W), Line().add(" " * NAME_W)
     for s in slots:
@@ -423,7 +455,8 @@ def board(
         first = offers.get((c.name, slots[0].key))
         if first is not None and first.mode != "reserve":
             key = (c.name, slots[0].key)
-            a, b = queue_cell(first, snap, span - 1, focus=(focus is not None and focus[0] == c.name), pick=picks.get(key, 0))
+            a, b = queue_cell(first, snap, span - 1, focus=(focus is not None and focus[0] == c.name), pick=picks.get(key, 0),
+                              short=c.name in sooner, compact=compact)  # fmt: skip
             fb = St(bg=BG_SELECT if (focus is not None and focus[0] == c.name) else None)
             r1.add(" ").add(" ", fb).extend_line(a)
             r2.add(" ").add(" ", fb).extend_line(b)
@@ -853,7 +886,7 @@ def detail_nodes(offer: Offer, window: Optional[Window] = None, *, stable: bool 
 
 def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str], width: int, k: int = 1,
                  window: Optional[Window] = None, max_lines: int = 0, picked: Optional[list[str]] = None,
-                 cursor: Optional[str] = None) -> list[Line]:  # fmt: skip
+                 cursor: Optional[str] = None, short: bool = False) -> list[Line]:  # fmt: skip
     """What stands behind a board cell: the exact window, the rules checked, the
     nodes. picked: nodes chosen by name (marked). cursor: the node under the
     picker's cursor (the list is then in node order)."""
@@ -878,8 +911,11 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
                 for chunk in wrap(note, width - 8):
                     out.append(Line().add("     · ", DIM).add(chunk, DIM))
     else:
-        for a in queue_cell(offer, snap, width - 4):
+        for a in queue_cell(offer, snap, width - 4, short=short):
             out.append(Line().add("   ").extend_line(a))
+        if offer.short_walltime:
+            hint = "s asks for the full length again" if short else "s asks for the sooner, shorter slot instead"
+            out.append(line("   " + hint, DIM))
     team = set(cfg.team)
     rows = []
     picked = picked or []
@@ -904,7 +940,15 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
             else:
                 ln.add("busy", DIM)
         else:
-            ln.add("free now" if nw.start <= now + 120 else f"est. free {fmt_when(nw.start, now)}", OK if nw.start <= now + 120 else WARN)
+            soon = nw.start <= now + 120
+            until = f" until {fmt_when(nw.until, now)}" if nw.until < 10**10 else ""
+            if soon and n.hard != "alive":  # no job on it, but not up either: a job waits for it to come back
+                ln.add(f"{n.hard} now" + (f", free{until}" if until else ""), WARN)
+            else:
+                ln.add(("free now" if soon else f"est. free {fmt_when(nw.start, now)}") + until, OK if soon else WARN)
+            if nw.next is not None:
+                person, pst = _person(nw.next, snap, team, names)
+                ln.add("  then ", DIM).add(person, pst)
             if nw.blocker is not None:
                 person, pst = _person(nw.blocker, snap, team, names)
                 ln.add("  held by ", DIM).add(person, pst).add(f" until {fmt_when(nw.blocker.end, now)}", DIM)

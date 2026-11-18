@@ -105,6 +105,52 @@ class NamedNodes(unittest.TestCase):
         self.assertEqual([nw.node.name for nw in views.detail_nodes(o, stable=True)], ["yeti-1", "yeti-2", "yeti-3", "yeti-4"])
 
 
+class QueuedChoice(unittest.TestCase):
+    """A queued cluster where a shorter job would start sooner shows both choices."""
+
+    def setUp(self):
+        self.now = T(MON, 19, 15)
+        running = resv("ishah", T(MON, 18, 21), T(TUE, 2, 21), queue="p3", kind="B", now=self.now)
+        admin = resv("nperrin", T(TUE, 8), T(TUE, 14), queue="admin", state="waiting")
+        mine = resv("me", 0, 0, queue="p3", kind="B", state="waiting")
+        self.snap = snapshot(self.now, [cluster("grosminet", 1, site="nancy", cores=72, queues=("abaca", "admin", "production"),
+                                                access="p3", max_walltime=24 * H, busy={1: [running, admin]})],
+                             jobs=[my_job("nancy", mine, [], {"grosminet": 0})])  # fmt: skip
+        slot = avail.slots(self.now)[0]
+        self.offer = avail.offer_for(self.snap, self.snap.clusters["grosminet"], slot, margin=300, besteffort_walltime=48 * H)
+
+    def lines(self, width=66, **kw):
+        return [term.ansi(ln, color=False).rstrip() for ln in views.queue_cell(self.offer, self.snap, width, **kw)]
+
+    def test_the_full_length_by_default_and_the_first_slot_beside_it(self):
+        l1, l2 = self.lines(width=100)
+        self.assertEqual(l1, "queue p3 · up to 24h · est. start Tue 14:01  ●1")
+        self.assertEqual(l2, "sooner: 5h21 from Tue 02:22 · no day or night rule, higher priorities go first")
+        _, l2 = self.lines(width=66)  # what does not fit after the other choice is left out, not cut
+        self.assertEqual(l2, "sooner: 5h21 from Tue 02:22")
+
+    def test_the_first_slot_when_chosen(self):
+        l1, l2 = self.lines(width=100, short=True)
+        self.assertEqual(l1, "queue p3 · 5h21 · est. start Tue 02:22  ●1")
+        self.assertTrue(l2.startswith("or up to 24h from Tue 14:01 · "), l2)
+
+    def test_one_line_carries_both_and_keeps_the_marker(self):
+        l1, _ = self.lines(width=80, compact=True)
+        self.assertEqual(l1, "queue p3 · up to 24h · est. start Tue 14:01 · sooner: 5h21 from Tue 02:22  ●1")
+        l1, _ = self.lines(width=50, compact=True)  # no room for the other choice: the marker stays
+        self.assertEqual(l1, "queue p3 · up to 24h · est. start Tue 14:01  ●1")
+
+    def test_the_detail_lists_the_free_stretch_and_what_follows(self):
+        def detail(**kw):
+            return [term.ansi(ln, color=False).rstrip() for ln in views.offer_detail(self.offer, self.snap, cfg(), {}, 110, **kw)]
+
+        text = detail()
+        row = "   ● grosminet-1    est. free Tue 02:22 until Tue 07:58  then maintenance  held by ishah until Tue 02:21"
+        self.assertIn(row, text)
+        self.assertIn("   s asks for the sooner, shorter slot instead", text)
+        self.assertIn("   s asks for the full length again", detail(short=True))
+
+
 class Marker(unittest.TestCase):
     """The ●N of nodes you already hold stays visible in every kind of cell, in the colour of the job's state."""
 
