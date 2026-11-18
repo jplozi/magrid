@@ -147,8 +147,31 @@ class QueuedChoice(unittest.TestCase):
         text = detail()
         row = "   ● grosminet-1    est. free Tue 02:22 until Tue 07:58  then maintenance  held by ishah until Tue 02:21"
         self.assertIn(row, text)
-        self.assertIn("   s asks for the sooner, shorter slot instead", text)
-        self.assertIn("   s asks for the full length again", detail(short=True))
+        # the detail belongs to the interactive board: it names the key that takes the other choice
+        self.assertIn("   sooner: 5h21 from Tue 02:22, press s · no day or night rule, higher priorities go first", text)
+        back = "   or up to 24h from Tue 14:01, press s · no day or night rule, higher priorities go first"
+        self.assertIn(back, detail(short=True))
+
+    def test_the_board_says_how_to_ask_for_the_other_choice(self):
+        snap = snapshot(self.now, [*self.snap.clusters.values(), cluster("yeti", 2)])
+        cs = list(snap.clusters.values())
+        slots = views.visible_slots(avail.slots(self.now), 130)
+        offers = avail.build_offers(snap, cs, slots, margin=300, besteffort_walltime=48 * H)
+        conf = cfg(clusters=[c.name for c in cs])
+
+        def board(**kw):
+            return "\n".join(term.ansi(ln, color=False).rstrip() for ln in views.board(snap, conf, cs, slots, offers, 130, **kw))
+
+        # printed: the option of magrid book
+        self.assertIn("sooner: 5h21 from Tue 02:22 with --short", board())
+        # interactive: the key, on the row under the cursor only, since s acts on that row
+        self.assertIn("sooner: 5h21 from Tue 02:22, press s", board(keys=True, focus=("grosminet", slots[0].key)))
+        elsewhere = board(keys=True, focus=("yeti", slots[0].key))
+        self.assertIn("sooner: 5h21 from Tue 02:22", elsewhere)
+        self.assertNotIn("press s", elsewhere)
+        self.assertNotIn("--short", elsewhere)
+        chosen = board(keys=True, focus=("grosminet", slots[0].key), sooner={"grosminet"})
+        self.assertIn("or up to 24h from Tue 14:01, press s", chosen)
 
 
 class Marker(unittest.TestCase):

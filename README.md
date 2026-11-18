@@ -34,8 +34,8 @@ over several web pages and commands. magrid gathers it and applies the rules.
   and the longest duration the rules allow. Production clusters show the
   priority queue, the maximum walltime and an estimated start. When a shorter
   job would start sooner than one of the maximum length, the cell gives that
-  first slot as well (`sooner: 5h21 from Thu 02:22`), and it can be asked for
-  instead.
+  first slot as well (`sooner: 5h21 from Thu 02:22`) and how to ask for it
+  instead: the key in the interactive board, the option on the command line.
 - **Booking.** Given clusters and node counts, magrid selects the window,
   computes the start and the walltime, lists the rules it checked, prints the
   `oarsub` command and asks for confirmation. After submission it reads back

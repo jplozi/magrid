@@ -120,16 +120,23 @@ class QueuedChoice(Offline):
         self.assertEqual((b.sooner, b.short), (set(), False))
         self.assertIn("nothing shorter", b.message)
         o.short_walltime, o.short_est = 5 * 3600, list(o.est)  # as if five hours came before a full-length slot
+        b.draw()  # the row under the cursor names the key
+        self.assertRegex(scr.text(), r"sooner: 5h [^\n]*, press s")
         b.key(ord("s"))
         self.assertEqual((b.sooner, b.short), ({"grdix"}, False))
         self.assertTrue(b.asks({key: 1})[0][1].short)
+        self.assertIn("grdix: Enter now books the first slot, 5h", b.message)
         b.draw()
         self.assertIn("queue p3 · 5h ·", scr.text())
-        self.assertIn("or up to 48h", scr.text())
+        self.assertRegex(scr.text(), r"or up to 48h [^\n]*, press s")
         b.key(ord("s"))
         self.assertEqual(b.sooner, set())
         self.assertFalse(b.asks({key: 1})[0][1].short)
+        self.assertIn("full length again", b.message)
         b.row = [c.name for c in b.clusters].index("yeti")  # a reservable cluster: the old meaning
+        b.draw()  # the cursor is elsewhere: s would not act on grdix, so no row offers it
+        self.assertIn("sooner: 5h", scr.text())
+        self.assertNotIn("press s", scr.text())
         b.key(ord("s"))
         self.assertEqual((b.sooner, b.short), (set(), True))
 

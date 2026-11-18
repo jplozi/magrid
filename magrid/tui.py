@@ -508,7 +508,7 @@ class Board:
                     shown = self.clusters[first : first + keep]
                 for ln in views.board(snap, self.app.cfg, shown, self.slots, self.offers, self.width,
                                       focus=focus, picks=self.picks, windows=windows, compact=compact,
-                                      named=self.named, sooner=self.sooner):  # fmt: skip
+                                      named=self.named, sooner=self.sooner, keys=True):  # fmt: skip
                     self.screen.put(y, ln)
                     y += 1
                 if len(shown) < n:
@@ -910,6 +910,11 @@ class Board:
                 self.say("nothing shorter starts sooner here: a full-length job starts as soon", DIM)
             else:
                 self.sooner ^= {o.cluster.name}
+                if o.cluster.name in self.sooner:
+                    self.say(f"{o.cluster.name}: Enter now books the first slot, {fmt_dur(o.short_walltime, exact=True)}. "
+                             "s again for the full length", OKB)  # fmt: skip
+                else:
+                    self.say(f"{o.cluster.name}: Enter books the full length again", DIM)
         elif ch in (ord("g"), ord("G")):
             self.pane = "detail" if self.pane == "gantt" else "gantt"
         elif ch in (curses.KEY_ENTER, 10, 13, ord("b"), ord("B")):

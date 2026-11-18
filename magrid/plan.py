@@ -326,7 +326,8 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
                 extra.append(f"it fits before what follows only if it starts within {fmt_dur(first.spare)} of the estimate")
             else:
                 starts = "now" if first.start <= now + 120 else fmt_when(first.start, now)
-                extra.append(f"a shorter job, {fmt_dur(first.length, exact=True)}, would start {starts}")
+                extra.append(f"a shorter job, {fmt_dur(first.length, exact=True)}, would start {starts}: "
+                             "s on the board, --short on the command line")  # fmt: skip
         v = policy.Verdict()
         v.add("queue", True, f"{offer.queue} queue: walltime {fmt_dur(length, exact=True)} of at most {fmt_dur(limit)}")
         req = Request(

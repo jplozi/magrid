@@ -266,7 +266,7 @@ class FirstSlot(unittest.TestCase):
     def test_a_full_length_job_says_what_would_start_sooner(self):
         [r] = self.ask(When())
         self.assertEqual((r.walltime, r.est_start), (48 * H, T(TUE, 14, 1)))
-        self.assertIn("a shorter job, 12h38, would start now", r.notes)
+        self.assertIn("a shorter job, 12h38, would start now: s on the board, --short on the command line", r.notes)
 
     def test_short_where_nothing_shorter_starts_sooner(self):
         from tests.helpers import cluster, snapshot

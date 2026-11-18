@@ -332,11 +332,13 @@ def offer_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
 
 
 def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False, pick: int = 0, short: bool = False,
-               compact: bool = False) -> tuple[Line, Line]:  # fmt: skip
+               compact: bool = False, how: str = "") -> tuple[Line, Line]:  # fmt: skip
     """The wide cell of a cluster whose jobs are queued (abaca, best-effort).
     When a shorter job would start sooner than a full-length one, both are
-    shown: short says which of the two is asked for. In a compact board only
-    the first line shows, so it carries the other choice when there is room."""
+    shown: short says which of the two is asked for, and how says how to ask
+    for the other one (a key in the interactive board, an option otherwise).
+    In a compact board only the first line shows, so it carries the other
+    choice when there is room."""
     now = snap.now
     bg = BG_SELECT if focus else None
     if offer.cluster.state in ("reading", "unread"):
@@ -359,6 +361,8 @@ def queue_cell(offer: Offer, snap: Snapshot, width: int, *, focus: bool = False,
         other = f"or up to {fmt_dur(offer.walltime)} {starting(offer.est[0][0])}"
     elif offer.short_walltime:
         other = f"sooner: {fmt_dur(offer.short_walltime, exact=True)} {starting(offer.short_est[0][0])}"
+    if other:
+        other += how
     mark = Line()
     mine = [j for j in snap.jobs if offer.cluster.name in j.clusters]
     if mine:
@@ -431,10 +435,13 @@ def board(
     compact: bool = False,
     named: Optional[dict[tuple[str, str], list[str]]] = None,
     sooner: Optional[set[str]] = None,
+    keys: bool = False,
 ) -> list[Line]:
     """The table: one row per cluster, one column per slot. compact keeps one
     line per cluster, for short terminals. named: nodes chosen by name per cell.
-    sooner: queued clusters on which the first slot is asked for, not the full length."""
+    sooner: queued clusters on which the first slot is asked for, not the full length.
+    keys: the interactive board, where a row under the cursor names the key that
+    takes its other choice. The printed board names the option of magrid book."""
     now = snap.now
     picks = picks or {}
     windows = windows or {}
@@ -455,9 +462,11 @@ def board(
         first = offers.get((c.name, slots[0].key))
         if first is not None and first.mode != "reserve":
             key = (c.name, slots[0].key)
-            a, b = queue_cell(first, snap, span - 1, focus=(focus is not None and focus[0] == c.name), pick=picks.get(key, 0),
-                              short=c.name in sooner, compact=compact)  # fmt: skip
-            fb = St(bg=BG_SELECT if (focus is not None and focus[0] == c.name) else None)
+            under = focus is not None and focus[0] == c.name
+            how = (", press s" if under else "") if keys else " with --short"  # s acts on the row under the cursor
+            a, b = queue_cell(first, snap, span - 1, focus=under, pick=picks.get(key, 0), short=c.name in sooner,
+                              compact=compact, how=how)  # fmt: skip
+            fb = St(bg=BG_SELECT if under else None)
             r1.add(" ").add(" ", fb).extend_line(a)
             r2.add(" ").add(" ", fb).extend_line(b)
         else:
@@ -911,11 +920,8 @@ def offer_detail(offer: Offer, snap: Snapshot, cfg: Config, names: dict[str, str
                 for chunk in wrap(note, width - 8):
                     out.append(Line().add("     · ", DIM).add(chunk, DIM))
     else:
-        for a in queue_cell(offer, snap, width - 4, short=short):
+        for a in queue_cell(offer, snap, width - 4, short=short, how=", press s"):
             out.append(Line().add("   ").extend_line(a))
-        if offer.short_walltime:
-            hint = "s asks for the full length again" if short else "s asks for the sooner, shorter slot instead"
-            out.append(line("   " + hint, DIM))
     team = set(cfg.team)
     rows = []
     picked = picked or []
