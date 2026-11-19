@@ -141,6 +141,49 @@ class QueuedChoice(Offline):
         self.assertEqual((b.sooner, b.short), (set(), True))
 
 
+class OneBooking(Offline):
+    """s asks for the first slot for the next Enter on that row, and for nothing after it."""
+
+    def setUp(self):
+        super().setUp()
+        args = cli.build_parser().parse_args(["--width", "120", "--no-color", "tui"])
+        app = cli.App(args)
+        cli._known_clusters(app)
+        app.history_later = True
+        app.load(app.board())
+        self.b = b = make_board(self, app, FakeStdscr())
+        b.row = [c.name for c in b.clusters].index("grdix")
+        self.key = b.focus_key()
+        o = b.offers[self.key]
+        o.short_walltime, o.short_est = 5 * 3600, list(o.est)  # as if five hours came before a full-length slot
+
+    def test_a_booking_uses_the_choice_up(self):
+        b = self.b
+        left, asked = [], []
+        b.leave = left.append  # the review happens outside the board: not run here
+        asks = b.asks
+        b.asks = lambda picks: asked.append(asks(picks)) or asked[-1]
+        b.key(ord("s"))
+        self.assertEqual(b.sooner, {"grdix"})
+        b.key(10)  # Enter
+        self.assertEqual(len(left), 1)
+        self.assertTrue(asked[0][0][1].short)  # this booking is for the first slot
+        self.assertEqual(b.sooner, set())
+        b.key(10)  # Enter again, as on 2026-11-19 at 00:22: the full length, not the first slot once more
+        self.assertFalse(asked[1][0][1].short)
+
+    def test_moving_to_another_row_drops_the_choice(self):
+        b = self.b
+        away, back = (curses.KEY_DOWN, curses.KEY_UP) if b.row < len(b.clusters) - 1 else (curses.KEY_UP, curses.KEY_DOWN)
+        b.key(ord("s"))
+        self.assertEqual(b.sooner, {"grdix"})
+        b.key(away)
+        self.assertEqual(b.sooner, set())
+        b.key(back)
+        self.assertEqual((b.focus_key(), b.sooner), (self.key, set()))
+        self.assertFalse(b.asks({self.key: 1})[0][1].short)
+
+
 class QuotaReread(Offline):
     """A quota re-read asked while a reading is in flight is not lost."""
 

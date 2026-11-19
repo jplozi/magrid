@@ -123,6 +123,7 @@ class Planned:
     floating: bool = False  # starts "now": the start is set again at submission time
     cores: int = 0
     offer: Optional[Offer] = None
+    first_slot: bool = False  # a queued job cut to the first slot that exists: checked again at submission time
 
 
 @dataclass
@@ -335,7 +336,8 @@ def _queue(snap: Snapshot, cfg: Config, c: Cluster, want: Want, when: When, now:
             types=types, walltime=length, hosts=hosts, avoid=([] if hosts else avoid), command=cfg.command, verdict=v,
             notes=notes + extra, est_start=t,
         )  # fmt: skip
-        plan.items.append(Planned(req, c, None, False, cores=req.nodes * c.cores_per_node, offer=offer))
+        plan.items.append(Planned(req, c, None, False, cores=req.nodes * c.cores_per_node, offer=offer,
+                                  first_slot=length != walltime))  # fmt: skip
         gone = {n.name for n in used}
         left = [n for n in left if n.name not in gone]
     if when.short and offer.mode == "queue" and walltime == limit and not shortened:
@@ -373,13 +375,35 @@ def make_plan(snap: Snapshot, cfg: Config, wants: list[Want], when: When, *, spl
     return make_plans(snap, cfg, [(w, when) for w in merge_wants(wants)], split=split, besteffort=besteffort, now=now)
 
 
-def finalize(item: Planned, snap: Snapshot, now: int) -> Optional[str]:
+def slot_still_there(item: Planned, snap: Snapshot, cfg: Config, now: int) -> Optional[str]:
+    """A queued job cut to the first slot is worth submitting only while that
+    slot is free. Once it is taken, by the user's own previous job for
+    instance, the scheduler puts the short job after what follows, where a
+    full-length one would start as soon. Returns a problem, or None."""
+    req = item.request
+    c = snap.clusters.get(req.cluster)
+    if c is None:
+        return None
+    offer = avail.queue_offer(snap, c, avail.slots(now)[0], cfg.besteffort_walltime, now=now, margin=cfg.margin)
+    pool = [n for _, n in offer.est if (n.name in req.hosts if req.hosts else n.name not in req.avoid)]
+    if len(pool) < req.nodes:
+        return f"{req.cluster}: {req.nodes} node{'s' if req.nodes > 1 else ''} asked, {len(pool)} usable now"
+    short = avail.estimates(pool, now, req.walltime, offer.queue)[req.nodes - 1][0]
+    full = avail.estimates(pool, now, offer.walltime, offer.queue)[req.nodes - 1][0]
+    if short < full - 120:
+        return None
+    return (f"{req.cluster}: the slot this job was cut for is taken. A job of {fmt_dur(req.walltime, exact=True)} would now "
+            f"start {fmt_when(short, now)}, no sooner than one of {fmt_dur(offer.walltime)}")  # fmt: skip
+
+
+def finalize(item: Planned, snap: Snapshot, now: int, cfg: Optional[Config] = None) -> Optional[str]:
     """Just before submitting: set the start of a "now" reservation from the
     current clock and check the request once more against the rules as they
-    stand at this very moment. Returns a problem, or None."""
+    stand at this very moment. A queued job cut to the first slot is checked
+    against the platform as it now is (cfg given). Returns a problem, or None."""
     req = item.request
     if not req.is_reservation:
-        return None
+        return slot_still_there(item, snap, cfg, now) if (item.first_slot and cfg is not None) else None
     end = req.start + req.walltime
     if item.floating:
         req.start = ceil_minute(now + LEAD)

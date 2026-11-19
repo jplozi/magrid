@@ -55,7 +55,8 @@ HELP = """\
    j                 your jobs: d deletes one, x extends one
    s                 the shorter choice. On a reservable cluster, "now" stays in the current
                      period (no running on through 19:00 or 09:00). On a queued cluster, the
-                     first slot that exists is asked for instead of the full length
+                     first slot that exists is asked for instead of the full length, for the
+                     next Enter on that row only
    r                 read the platform again (done every minute anyway)
    ?                 this help                              q   quit
 
@@ -157,7 +158,9 @@ class Board:
         self.message = ""
         self.message_style = DIM
         self.short = False
-        self.sooner: set[str] = set()  # queued clusters on which the first slot is asked for, not the full length
+        # the queued cluster on which s asked for the first slot instead of the full length. It holds for the next
+        # Enter on that row: a booking uses it up, and so does moving to another row
+        self.sooner: set[str] = set()
         self.loading = False
         self.loaded_at = time.time()
         self.fresh: Optional[Snapshot] = None
@@ -211,6 +214,7 @@ class Board:
         self.findings = self.app.findings()
         self.sooner = {name for (name, _), o in self.offers.items() if name in self.sooner and o.short_walltime}
         self.row = min(self.row, max(0, len(self.clusters) - 1))
+        self.settle_choice()
         self.col = min(self.col, max(0, len(self.slots) - 1))
         # choices that no longer exist are dropped
         for key in list(self.picks):
@@ -346,6 +350,11 @@ class Board:
             return (c.name, self.slots[0].key)
         return (c.name, self.slots[self.col].key)
 
+    def settle_choice(self) -> None:
+        """The first slot is asked for on the row under the cursor only."""
+        here = self.focus_key()
+        self.sooner &= {here[0]} if here else set()
+
     def focus_offer(self):
         key = self.focus_key()
         return self.offers.get(key) if key else None
@@ -467,6 +476,7 @@ class Board:
     # Draw
 
     def draw(self) -> None:
+        self.settle_choice()
         self.scr.erase()
         h, w = self.scr.getmaxyx()
         self.width = max(60, w)
@@ -642,10 +652,12 @@ class Board:
                 return
             picks = {key: 1}
         app = self.app
+        self.settle_choice()
+        asks = self.asks(picks)
+        self.sooner.clear()  # s was for this booking: afterwards Enter books the full length again
 
         def action():
             snap = app.snap
-            asks = self.asks(picks)
             pl = plan.make_plans(snap, app.cfg, asks)
             dry = app.read_only
             print()
@@ -911,8 +923,8 @@ class Board:
             else:
                 self.sooner ^= {o.cluster.name}
                 if o.cluster.name in self.sooner:
-                    self.say(f"{o.cluster.name}: Enter now books the first slot, {fmt_dur(o.short_walltime, exact=True)}. "
-                             "s again for the full length", OKB)  # fmt: skip
+                    self.say(f"{o.cluster.name}: Enter now books the first slot, {fmt_dur(o.short_walltime, exact=True)}, "
+                             "once. s again for the full length", OKB)  # fmt: skip
                 else:
                     self.say(f"{o.cluster.name}: Enter books the full length again", DIM)
         elif ch in (ord("g"), ord("G")):
@@ -921,6 +933,7 @@ class Board:
             self.book()
         else:
             return True
+        self.settle_choice()
         return True
 
     def loop(self) -> None:

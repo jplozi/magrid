@@ -137,6 +137,14 @@ reads OAR's sliding prediction for it as crossing a boundary.
 After submission, the start and walltime recorded by OAR are read back and
 checked, and `usagepolicycheck` is run on the sites concerned.
 
+On a production cluster, a queued job of the user's own that the platform
+shows on no node yet is counted where the scheduler will put it, the first
+stretch that fits it. OAR does not always give a waiting job a predicted
+start, and the slot that job is about to take would otherwise be offered a
+second time. A job cut to the first slot is checked again when it is
+submitted: if the slot has been taken in the meantime, nothing is submitted,
+since the scheduler would place the short job after what follows.
+
 **Drift.** `magrid doctor` compares fingerprints of the three rule sources
 (wiki revision, script checksum, admission rules of each site) with those
 magrid was verified against, and reports any change.
@@ -238,7 +246,9 @@ name in the focused cell (Space) or marks one as avoided for good (`x` on the
 node), `g` shows the timeline, `j` the user's jobs, `?` the help. `s` asks
 for the shorter choice: on a reservable cluster, a window for now that stays
 inside the current period, and on a production cluster, the first slot that
-exists instead of the full length.
+exists instead of the full length. On a production cluster the choice holds
+for one booking: after Enter, or when the cursor leaves the row, Enter books
+the full length again.
 
 A booking plan, as shown before confirmation:
 

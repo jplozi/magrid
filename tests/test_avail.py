@@ -2,7 +2,7 @@ import random
 import unittest
 
 from magrid import avail, cal, checker, policy
-from tests.helpers import FRI, H, MON, MON2, SAT, THU, TUE, WED, T, cfg, cluster, platform, resv, snapshot
+from tests.helpers import FRI, H, MON, MON2, SAT, THU, TUE, WED, T, cfg, cluster, my_job, platform, resv, snapshot
 
 M = 300  # the default margin
 
@@ -284,6 +284,55 @@ class Queue(unittest.TestCase):
         self.assertEqual((o.short_walltime, o.short_est[0]), (9 * H + 42 * 60, (T(MON, 22, 1), n2)))
         named = avail.restricted(snap, o, ["grdix-3"], 300)  # limited to a node that has nothing shorter to give
         self.assertEqual((named.short_walltime, named.short_est), (0, []))
+
+    def test_a_queued_job_of_mine_takes_its_slot_before_oar_places_it(self):
+        # 2026-11-19, grosminet at 00:22: a job of 5h21 submitted seven minutes earlier waits for the stretch
+        # from 02:22. The platform gives it no predicted start, so the stretch looked free and was offered again
+        now = T(MON, 0, 22)
+        running = resv("ishah", T(MON, 0) - 4 * H, T(MON, 2, 21), queue="p3", kind="B", types=(), now=now)
+        admin = resv("nperrin", T(MON, 8), T(MON, 14), queue="admin", state="waiting")
+        c = cluster("grosminet", 1, busy={1: [running, admin]}, **self.ABACA)
+        self.assertEqual(offer(snapshot(now, [c]), "grosminet", "now").short_walltime, 5 * H + 21 * 60)
+        mine = resv("me", 0, 5 * H + 21 * 60, queue="p3", kind="B", state="waiting", job_id=7051583)
+        snap = snapshot(now, [c], jobs=[my_job("nancy", mine, [], {"grosminet": 0})])
+        o = offer(snap, "grosminet", "now")
+        self.assertEqual((o.short_walltime, o.est[0][0]), (0, T(MON, 14, 1)))  # nothing shorter is left to offer
+        self.assertEqual((o.windows[0].start, o.windows[0].next), (T(MON, 14, 1), None))
+        self.assertEqual(c.nodes[0].resvs, [running, admin])  # the snapshot keeps what the platform said
+        # once OAR has placed it, it is not counted twice
+        placed = resv("me", T(MON, 2, 22), T(MON, 7, 43), queue="p3", kind="B", state="waiting", job_id=7051583)
+        c2 = cluster("grosminet", 1, busy={1: [running, placed, admin]}, **self.ABACA)
+        snap2 = snapshot(now, [c2], jobs=[my_job("nancy", placed, ["grosminet-1"], {"grosminet": 72})])
+        self.assertIs(avail.placed_pending(snap2, c2, now), c2.nodes)
+        self.assertEqual(offer(snap2, "grosminet", "now").est[0][0], T(MON, 14, 1))
+        # an idle node that a job of mine is about to take is not free for the next one. The queue is still the one
+        # it was submitted to: it counts as a job of the nodes' own queue
+        idle = cluster("grosminet", 1, **self.ABACA)
+        full = resv("me", 0, 24 * H, queue="abaca", kind="B", state="waiting")
+        o = offer(snapshot(now, [idle], jobs=[my_job("nancy", full, [], {"grosminet": 0})]), "grosminet", "now")
+        self.assertEqual(o.est[0][0], now + 24 * H + 60)
+
+    def test_a_pending_job_goes_where_its_request_says(self):
+        now = T(MON, 19, 15)
+        c = cluster("grdix", 3, **dict(self.ABACA, max_walltime=48 * H))
+        named = my_job("nancy", resv("me", 0, 48 * H, queue="p3", kind="B", state="waiting"), [], {"grdix": 0})
+        named.properties = "((host in ('grdix-2.nancy.grid5000.fr')) AND nodeset in ('grdix')) AND deploy = 'YES'"
+        nodes = avail.placed_pending(snapshot(now, [c], jobs=[named]), c, now)
+        self.assertEqual([len(n.resvs) for n in nodes], [0, 1, 0])
+        but = my_job("nancy", resv("me", 0, 48 * H, queue="p3", kind="B", state="waiting"), [], {"grdix": 0})
+        but.properties = "((cluster='grdix' AND host not in ('grdix-1.nancy.grid5000.fr')) AND nodeset in ('grdix'))"
+        but.resv.cores = 2 * 72  # two nodes in one job, as OAR's message says once it has looked at it
+        nodes = avail.placed_pending(snapshot(now, [c], jobs=[but]), c, now)
+        self.assertEqual([len(n.resvs) for n in nodes], [0, 1, 1])
+        # a job just submitted, which OAR has answered for: it is put where OAR said, not where it would fit first
+        answered = resv("me", T(MON, 22), T(TUE, 22), queue="abaca", kind="B", state="waiting")
+        told = my_job("nancy", answered, ["grdix-3"], {"grdix": 72})
+        nodes = avail.placed_pending(snapshot(now, [c], jobs=[told]), c, now)
+        self.assertEqual([[(r.start, r.queue) for r in n.resvs] for n in nodes], [[], [], [(T(MON, 22), "p3")]])
+        # a best-effort job of mine holds nothing against a regular job, and one without a length cannot be placed
+        soft = my_job("nancy", resv("me", 0, 4 * H, queue="besteffort", kind="B", state="waiting"), [], {"grdix": 0})
+        none = my_job("nancy", resv("me", 0, 0, queue="p3", kind="B", state="waiting"), [], {"grdix": 0})
+        self.assertIs(avail.placed_pending(snapshot(now, [c], jobs=[soft, none]), c, now), c.nodes)
 
     def test_besteffort_only_cluster(self):
         now = T(MON, 13, 10)

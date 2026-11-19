@@ -152,6 +152,29 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class Properties(unittest.TestCase):
+    """What a job's request says about where it can run."""
+
+    def test_the_nodes_a_request_names_or_leaves_out(self):
+        from magrid.model import hosts_of_properties
+
+        named = "((host in ('grdix-3.nancy.grid5000.fr','grdix-5.nancy.grid5000.fr')) AND nodeset in ('grdix'))"
+        self.assertEqual(hosts_of_properties(named), ({"grdix-3", "grdix-5"}, set()))
+        self.assertEqual(fetch.cluster_of_properties(named), "grdix")
+        but = "(((cluster='yeti' AND host not in ('yeti-4.grenoble.grid5000.fr')) AND nodeset in ('yeti')) AND deploy = 'YES')"
+        self.assertEqual(hosts_of_properties(but), (set(), {"yeti-4"}))
+        self.assertEqual(fetch.cluster_of_properties(but), "yeti")
+        self.assertEqual(hosts_of_properties("(cluster='grosminet') AND nodeset in ('grosminet','grdix')"), (set(), set()))
+        self.assertEqual(fetch.cluster_of_properties(""), "")
+
+    def test_the_cores_a_job_asks_for(self):
+        message = "R=144,W=5:21:0,J=B,Q=p3,P=inria-paris,T=deploy (Karma=0.227)"
+        r = resv_from_api({"uid": 1, "state": "waiting", "message": message})
+        self.assertEqual((r.cores, r.kind, r.karma), (144, "B", 0.227))
+        unseen = resv_from_api({"uid": 2, "state": "waiting", "message": "Cannot find enough resources for job 2 yet"})
+        self.assertEqual(unseen.cores, 0)
+
+
 class WithoutUsagepolicycheck(unittest.TestCase):
     def test_active_jobs_are_still_counted_and_the_doubt_is_stated(self):
         ref, values, files = fetch.load_recording(FIXTURE)

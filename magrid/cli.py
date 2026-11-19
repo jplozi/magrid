@@ -490,7 +490,7 @@ def run_plan(app: App, pl: plan.Plan, *, say=None, ask=None) -> tuple[int, list[
     for it in pl.items:
         req = it.request
         now = app.now()
-        problem = plan.finalize(it, live, now)
+        problem = plan.finalize(it, live, now, app.cfg)
         if problem:
             say([Line().add(" ✘ ", BADB).add(f"not submitted: {problem}", BAD)])
             failures += 1
@@ -520,7 +520,7 @@ def run_plan(app: App, pl: plan.Plan, *, say=None, ask=None) -> tuple[int, list[
         if q is not None and req.verdict is not None:
             for day, seconds in req.verdict.daytime.items():
                 q.add(day, seconds * it.cores)
-        if req.is_reservation:
+        if req.is_reservation or req.queue == "abaca":  # a queued job too: it takes a slot before OAR says which
             live.jobs.append(verify.as_my_job(out, it))
     return failures, outcomes
 

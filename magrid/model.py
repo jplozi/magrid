@@ -37,6 +37,7 @@ class Resv:
     karma: Optional[float] = None
     name: str = ""
     command: str = ""
+    cores: int = 0  # cores asked for, when OAR's message says so (R=72). 0: not known
 
     @property
     def end(self) -> int:
@@ -65,8 +66,25 @@ class Resv:
 
 
 _KIND = re.compile(r"\bJ=([RBI])\b")
+_CORES = re.compile(r"\bR=(\d+)\b")
 _KARMA = re.compile(r"Karma=([0-9.]+)")
 _NAME = re.compile(r"\bN=([^,]*),")
+
+
+_HOSTS_IN = re.compile(r"\bhost\s+(not\s+)?in\s*\(([^)]*)\)", re.I)
+_HOST_IS = re.compile(r"\bhost\s*=\s*'([^']+)'", re.I)
+
+
+def hosts_of_properties(properties: str) -> tuple[set[str], set[str]]:
+    """The nodes a job's OAR properties name, by short name: those it is
+    limited to ("host in (...)") and those it leaves out ("host not in (...)")."""
+    only: set[str] = set()
+    never: set[str] = set()
+    for negated, names in _HOSTS_IN.findall(properties or ""):
+        short = {x.strip().strip("'").split(".")[0] for x in names.split(",") if x.strip()}
+        (never if negated else only).update(short)
+    only.update(h.split(".")[0] for h in _HOST_IS.findall(properties or ""))
+    return only, never
 
 
 def resv_from_api(r: dict) -> Resv:
@@ -84,6 +102,7 @@ def resv_from_api(r: dict) -> Resv:
         kind = "B" if (r.get("mode") or "") == "PASSIVE" else "?"
     km = _KARMA.search(message)
     nm = _NAME.search(message)
+    cm = _CORES.search(message)
     return Resv(
         job_id=int(r.get("uid") or 0),
         user=r.get("user_uid") or r.get("user") or "?",
@@ -99,6 +118,7 @@ def resv_from_api(r: dict) -> Resv:
         karma=float(km.group(1)) if km else None,
         name=(r.get("name") or (nm.group(1) if nm else "")) or "",
         command=r.get("command") or "",
+        cores=int(cm.group(1)) if cm else 0,
     )
 
 
@@ -229,6 +249,7 @@ class MyJob:
     clusters: dict[str, int] = field(default_factory=dict)  # cluster -> cores held
     extensions: list[tuple[int, int]] = field(default_factory=list)  # (request time, seconds added)
     events: list[dict] = field(default_factory=list)
+    properties: str = ""  # the OAR properties of the request: its cluster, the nodes it names or excludes
 
     @property
     def job_id(self) -> int:

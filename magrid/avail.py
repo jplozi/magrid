@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Optional
 
 from . import cal, policy
-from .model import HORIZON, Cluster, Node, Resv, Snapshot
+from .model import HORIZON, Cluster, Node, Resv, Snapshot, hosts_of_properties
 from .policy import EndOption, Verdict
 from .timefmt import fmt_dur, fmt_ts, fmt_when
 
@@ -416,6 +416,46 @@ def shorter_choice(nodes: list[Node], now: int, my_queue: str, walltime: int, ma
     return slot.length, estimates([n for n in nodes if n.hard == "alive"], now, slot.length, my_queue)
 
 
+def placed_pending(snap: Snapshot, cluster: Cluster, now: int) -> list[Node]:
+    """The nodes of a cluster once the user's own queued jobs that the nodes
+    do not show yet are put where the scheduler will put them: each in the
+    first stretch that fits it, oldest first. The platform does not always give
+    a predicted start for a waiting job, and until it does the slot that job is
+    going to take looks free. Copies are returned when a job is placed: the
+    snapshot itself only holds what the platform said."""
+    seen = {r.job_id for n in cluster.nodes for r in n.resvs}
+    waiting = sorted((j for j in snap.jobs if j.resv.state == "waiting" and j.resv.walltime > 0 and j.job_id not in seen
+                      and cluster.name in j.clusters and not j.resv.besteffort), key=lambda j: j.job_id)  # fmt: skip
+    if not waiting:
+        return cluster.nodes
+    nodes = [copy.copy(n) for n in cluster.nodes]
+    for n in nodes:
+        n.resvs = list(n.resvs)
+    for j in waiting:
+        only, never = hosts_of_properties(j.properties)
+        if j.resv.start and j.nodes:  # OAR has said where and when, after the nodes were read
+            only, never = set(j.nodes), set()
+        fit = [n for n in nodes if n.usable and n.name not in never and (not only or n.name in only)]
+        queue = j.resv.queue
+        if cluster.kind == "abaca":
+            labels = {n.access for n in fit}
+            if queue not in labels:  # as submitted (abaca): the name the admission rule gives it is the nodes' own
+                queue = next((q for q in ("p1", "p2", "p3", "p4") if q in labels), queue)
+            fit = [n for n in fit if n.access == queue] or fit
+        if j.resv.start and j.nodes:
+            for n in fit:
+                n.resvs.append(replace(j.resv, queue=queue))
+            continue
+        k = max(1, -(-j.resv.cores // cluster.cores_per_node)) if cluster.cores_per_node else 1
+        ranked = estimates(fit, now, j.resv.walltime, queue)
+        if len(ranked) < k:
+            continue
+        start = ranked[k - 1][0]
+        for _, n in ranked[:k]:
+            n.resvs.append(replace(j.resv, start=start, queue=queue))
+    return nodes
+
+
 def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltime: int, *, besteffort: bool = False,
                 now: Optional[int] = None, avoid: Iterable[str] = (), margin: int = 300) -> Offer:  # fmt: skip
     """A queued job: abaca priority queue, or best-effort. Nodes in avoid are
@@ -425,12 +465,13 @@ def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltim
     avoid = set(avoid)
     offer = Offer(cluster, slot, "queue", now)
     lvl = snap.level or policy.level("bronze")
+    cnodes = placed_pending(snap, cluster, now)  # with the user's own queued jobs that OAR has not placed yet
     if cluster.kind == "abaca" and not besteffort:
-        labels = {n.access for n in cluster.nodes if n.usable}
+        labels = {n.access for n in cnodes if n.usable}
         usable = [q for q in ("p1", "p2", "p3", "p4") if q in labels]
         if usable:
             offer.queue = usable[0]
-            nodes = [n for n in cluster.nodes if n.usable and n.access == offer.queue]
+            nodes = [n for n in cnodes if n.usable and n.access == offer.queue]
             offer.walltime = max(policy.abaca_limit(offer.queue, n.max_walltime) for n in nodes)
             nodes = [n for n in nodes if policy.abaca_limit(offer.queue, n.max_walltime) >= offer.walltime]
         elif "besteffort" in labels:
@@ -443,7 +484,7 @@ def queue_offer(snap: Snapshot, cluster: Cluster, slot: Slot, besteffort_walltim
         if not lvl.besteffort:
             offer.blocked = f"best-effort jobs are not open to your level ({lvl.name})"
         offer.walltime = min(besteffort_walltime, policy.BESTEFFORT_MAX_WALLTIME)
-        nodes = [n for n in cluster.nodes if n.usable and n.access != "none"]
+        nodes = [n for n in cnodes if n.usable and n.access != "none"]
     avoided = [n for n in nodes if n.name in avoid]
     nodes = [n for n in nodes if n.name not in avoid]
     offer.est = estimates(nodes, now, offer.walltime, offer.queue)
@@ -534,4 +575,4 @@ def day_of(ts: int) -> dt.date:
 
 __all__ = ["Slot", "Offer", "Window", "NodeWindow", "slots", "find_slot", "offer_for", "window_for", "max_nodes",
            "restricted", "estimate_start", "estimates", "first_slot", "FirstSlot", "node_hole", "node_holes",
-           "TURNAROUND", "describe", "explain_window", "LEAD", "fmt_ts"]  # fmt: skip
+           "placed_pending", "TURNAROUND", "describe", "explain_window", "LEAD", "fmt_ts"]  # fmt: skip

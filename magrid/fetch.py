@@ -26,7 +26,7 @@ from typing import Iterable, Optional
 
 from . import policy
 from .config import Config, cache_dir
-from .model import ACTIVE_STATES, Cluster, MyJob, Node, Snapshot, resv_from_api
+from .model import ACTIVE_STATES, Cluster, MyJob, Node, Snapshot, hosts_of_properties, resv_from_api
 from .remote import (FETCH_EPILOGUE, FETCH_PRELUDE, STREAM_EPILOGUE, STREAM_PRELUDE, Remote, RemoteError, env_site_override,
                      unpack, unpack_line)  # fmt: skip
 from .timefmt import fmt_clock as datetime_clock
@@ -321,9 +321,14 @@ _CLUSTER_PROPERTY = re.compile(r"cluster\s*=\s*'([^']+)'")
 
 def cluster_of_properties(properties: str) -> str:
     """The cluster named in a job's OAR properties, such as
-    "(((cluster='grosminet') AND nodeset in (...)) AND deploy = 'YES')", or ""."""
+    "(((cluster='grosminet') AND nodeset in (...)) AND deploy = 'YES')", or the
+    cluster of the nodes they name ("host in ('grdix-3.nancy.grid5000.fr')"), or ""."""
     m = _CLUSTER_PROPERTY.search(properties)
-    return m.group(1) if m else ""
+    if m:
+        return m.group(1)
+    only, _ = hosts_of_properties(properties)
+    clusters = {_split_node(h)[1] for h in only}
+    return clusters.pop() if len(clusters) == 1 else ""
 
 
 def _split_node(fqdn: str) -> tuple[str, str]:
@@ -530,7 +535,7 @@ def build_snapshot(values: dict[str, str], files: dict[str, bytes], ref: Referen
             if (it.get("state") or "").lower() not in ACTIVE_STATES:
                 continue
             job = MyJob(site=site, resv=resv_from_api(it), extensions=_extensions(it.get("events") or []),
-                        events=it.get("events") or [])  # fmt: skip
+                        events=it.get("events") or [], properties=it.get("properties") or "")  # fmt: skip
             for fqdn, s in (status.get(site) or {}).items():
                 for r in s.get("reservations") or []:
                     if r.get("uid") == job.job_id:

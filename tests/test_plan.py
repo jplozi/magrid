@@ -268,6 +268,27 @@ class FirstSlot(unittest.TestCase):
         self.assertEqual((r.walltime, r.est_start), (48 * H, T(TUE, 14, 1)))
         self.assertIn("a shorter job, 12h38, would start now: s on the board, --short on the command line", r.notes)
 
+    def test_a_first_slot_job_is_checked_again_when_submitted(self):
+        from tests.helpers import my_job, snapshot
+
+        item = make_plan(self.snap, cfg(), [Want("grdix", 1)], When(short=True)).items[0]
+        self.assertTrue(item.first_slot)
+        self.assertIsNone(plan.finalize(item, self.snap, self.now, cfg()))
+        # the same job asked once more after it was submitted: OAR has not placed the first one yet, but that one
+        # takes the slot, and a second job of that length would wait until after the reservation
+        mine = resv("me", 0, item.request.walltime, queue="p3", kind="B", state="waiting")
+        later = snapshot(self.now, list(self.snap.clusters.values()), jobs=[my_job("nancy", mine, [], {"grdix": 0})])
+        problem = plan.finalize(item, later, self.now, cfg())
+        self.assertIn("the slot this job was cut for is taken", problem)
+        self.assertIn("A job of 12h38 would now start Tue 14:01, no sooner than one of 48h", problem)
+        # and the board no longer offers it: asked again, the first slot is the next one
+        [r] = [p.request for p in make_plan(later, cfg(), [Want("grdix", 1)], When(short=True)).items]
+        self.assertEqual((r.walltime, r.est_start), (9 * H + 42 * 60, T(MON, 22, 1)))
+        # a full-length job is not concerned
+        full = make_plan(later, cfg(), [Want("grdix", 1)], When()).items[0]
+        self.assertFalse(full.first_slot)
+        self.assertIsNone(plan.finalize(full, later, self.now, cfg()))
+
     def test_short_where_nothing_shorter_starts_sooner(self):
         from tests.helpers import cluster, snapshot
 
