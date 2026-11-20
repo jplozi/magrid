@@ -174,6 +174,75 @@ class QueuedChoice(unittest.TestCase):
         self.assertIn("or up to 24h from Tue 14:01, press s", chosen)
 
 
+class Selection(unittest.TestCase):
+    """The cell under the cursor is a rectangle of the selection colour, whatever it says."""
+
+    NOW = T(MON, 10)
+
+    def assertRectangle(self, lines, width):
+        for ln in lines:
+            shown = term.ansi(ln, color=False)
+            self.assertEqual(ln.width, width, shown)
+            self.assertEqual({st.bg for _, st in ln}, {term.BG_SELECT}, shown)
+
+    def cell(self, snap, name, slot=None, **kw):
+        slot = slot or avail.slots(snap.now)[0]
+        o = avail.offer_for(snap, snap.clusters[name], slot, margin=300, besteffort_walltime=48 * H)
+        draw = views.offer_cell if o.mode == "reserve" else views.queue_cell
+        return [term.ansi(ln, color=False).rstrip() for ln in draw(o, snap, 17, **kw)], draw(o, snap, 17, focus=True, **kw)
+
+    def test_a_cluster_with_nothing_to_book(self):
+        # 2026-11-20: yeti and chicoree, all busy for the day, had the colour stop after "all busy"
+        held = resv("bob", T(MON, 8), T(MON, 8) + 14 * 24 * H, now=self.NOW)
+        said, lines = self.cell(platform(self.NOW, yeti={"busy": {i: [held] for i in range(1, 5)}}), "yeti")
+        self.assertEqual(said, ["-", "all busy"])
+        self.assertRectangle(lines, 17)
+        said, lines = self.cell(platform(self.NOW, yeti={"dead": (1, 2, 3, 4)}), "yeti")
+        self.assertEqual(said, ["-", "no usable node"])
+        self.assertRectangle(lines, 17)
+
+    def test_a_cluster_being_read_or_closed_to_the_user(self):
+        snap = platform(self.NOW)
+        for name in ("yeti", "grdix"):
+            for state, word in (("reading", "reading"), ("unread", "not read" if name == "yeti" else "no answer")):
+                snap.clusters[name].state = state
+                said, lines = self.cell(snap, name)
+                self.assertIn(word, said[0])
+                self.assertRectangle(lines, 17)
+        closed = snapshot(self.NOW, [cluster("gros", 2, site="nancy", queues=("abaca", "admin", "production"), access="none")])
+        said, lines = self.cell(closed, "gros")
+        self.assertIn("your group has n", said[0])
+        self.assertRectangle(lines, 17)
+
+    def test_every_cell_of_the_board(self):
+        mine = resv("me", T(MON, 8), T(MON, 18), now=self.NOW)
+        queued = resv("me", 0, 0, queue="p3", kind="B", state="waiting")
+        snap = platform(self.NOW, yeti={"busy": {1: [mine]}},
+                        jobs=[my_job("grenoble", mine, ["yeti-1"], {"yeti": 64}), my_job("nancy", queued, [], {"grdix": 0})])
+        for slot in avail.slots(self.NOW):
+            for name in snap.clusters:
+                for kw in ({}, {"compact": True}, {"pick": 1}):
+                    self.assertRectangle(self.cell(snap, name, slot, **kw)[1], 17)
+        # and on the board itself the two lines of the cell under the cursor are as wide as each other
+        cs = list(snap.clusters.values())
+        slots = views.visible_slots(avail.slots(self.NOW), 132)
+        offers = avail.build_offers(snap, cs, slots, margin=300, besteffort_walltime=48 * H)
+        held = resv("bob", T(MON, 8), T(MON, 8) + 14 * 24 * H, now=self.NOW)
+        busy = platform(self.NOW, yeti={"busy": {i: [held] for i in range(1, 5)}})
+        for s, of, key in ((snap, offers, ("dahu", slots[0].key)),
+                           (busy, avail.build_offers(busy, list(busy.clusters.values()), slots, margin=300,
+                                                     besteffort_walltime=48 * H), ("yeti", slots[0].key))):  # fmt: skip
+            rows = views.board(s, cfg(clusters=list(s.clusters)), list(s.clusters.values()), slots, of, 132, focus=key)
+            lit = [sum(len(t) for t, st in ln if st.bg == term.BG_SELECT) for ln in rows]
+            self.assertEqual(sorted(n for n in lit if n), [views.CELL_W, views.CELL_W], key)
+
+    def test_the_row_chosen_in_the_catalogue(self):
+        ref = fetch.load_recording(FIXTURE)[0]
+        ln = views.catalogue_line("yeti", ref.clusters["yeti"], ref.access, on_board=True, last_used=0, now=self.NOW,
+                                  width=120, selected=True)  # fmt: skip
+        self.assertRectangle([ln], 120)
+
+
 class Marker(unittest.TestCase):
     """The ●N of nodes you already hold stays visible in every kind of cell, in the colour of the job's state."""
 

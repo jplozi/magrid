@@ -134,7 +134,9 @@ def line(text: str = "", st: St = PLAIN) -> Line:
 
 
 def cell(text: str, width: int, st: St = PLAIN, align: str = "<", fill: bool = False) -> Line:
-    """Text in a fixed-width cell, cut with an ellipsis when too long. With
+    """Text in a fixed-width cell, cut with an ellipsis when too long. The
+    padding takes the background of the style, so that a cell on a coloured
+    ground is a rectangle of that colour whatever the length of its text. With
     fill, the whole cell takes the style (a coloured band), not just the text."""
     if len(text) > width:
         text = text[: max(0, width - 1)] + "…" if width > 1 else text[:width]
@@ -142,12 +144,13 @@ def cell(text: str, width: int, st: St = PLAIN, align: str = "<", fill: bool = F
     if fill:
         left = pad if align == ">" else pad // 2 if align == "^" else 0
         return Line().add(" " * left + text + " " * (pad - left), st)
+    ground = St(bg=st.bg) if st.bg is not None else PLAIN
     if align == ">":
-        return Line().add(" " * pad).add(text, st)
+        return Line().add(" " * pad, ground).add(text, st)
     if align == "^":
         left = pad // 2
-        return Line().add(" " * left).add(text, st).add(" " * (pad - left))
-    return Line().add(text, st).add(" " * pad)
+        return Line().add(" " * left, ground).add(text, st).add(" " * (pad - left), ground)
+    return Line().add(text, st).add(" " * pad, ground)
 
 
 def wrap(text: str, width: int) -> list[str]:
